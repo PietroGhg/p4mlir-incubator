@@ -24,9 +24,7 @@ def BMv2_HeaderType : BMv2IR_Type<"Header", "header"> {
     
     The type encodes:
     - A unique name for the header type
-    - A unique integer ID
     - An array of fields (name, bitwidth, optional signed flag)
-    - Optional length expression for variable-length headers
     - Optional maximum length for variable-length headers
     
     Variable-length fields are represented with bitwidth = -1.
@@ -36,7 +34,7 @@ def BMv2_HeaderType : BMv2IR_Type<"Header", "header"> {
   let parameters = (ins
     StringRefParameter<"struct name">:$name,
     ArrayRefParameter<"BMv2IR::FieldInfo", "struct fields">:$fields,
-    OptionalParameter<"int">:$max_length
+    OptionalParameter<"unsigned">:$max_length
   );
   
   let assemblyFormat = [{
@@ -46,14 +44,16 @@ def BMv2_HeaderType : BMv2IR_Type<"Header", "header"> {
   }];
   
   let genVerifyDecl = 1;
+  let skipDefaultBuilders = 1;
+  let builders = [
+     TypeBuilder<(ins "llvm::StringRef":$name, "llvm::ArrayRef<BMv2IR::FieldInfo>":$fields), [{
+      return $_get($_ctxt, name, fields, computeMaxLength(fields));
+    }]>,
+  ];
   
   // Add verification for constraints
   let extraClassDeclaration = [{
-    /// Check if this header type has a variable-length field
-    bool hasVariableLengthField() const;
-    
-    /// Verify type constraints
-    ::mlir::LogicalResult verify();
+    static unsigned computeMaxLength(llvm::ArrayRef<BMv2IR::FieldInfo>);
   }];
 }
 

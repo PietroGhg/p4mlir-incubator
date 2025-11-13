@@ -11,25 +11,23 @@
 #include "mlir/IR/BuiltinTypes.h"
 
 namespace P4::P4MLIR::BMv2IR {
+
+// Struct that models a header field info.
 struct FieldInfo {
     mlir::StringAttr name;
-    int size;
-    bool isSigned;
+    mlir::Type type;
 
-    FieldInfo(mlir::StringAttr name, int size, bool isSigned)
-        : name(name), size(size), isSigned(isSigned) {}
+    FieldInfo(mlir::StringAttr name, mlir::Type type) : name(name), type(type) {}
 
     bool operator==(const FieldInfo &other) const {
-        return name == other.name && size == other.size;
+        return name == other.name && type == other.type;
     }
 
     friend llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const FieldInfo &f) {
-        return os << f.name.data() << "<" << (f.size != kDynamic ? std::to_string(f.size) : "*")
-                  << (f.isSigned ? ",s" : "") << ">";
+        return os << f.name.data() << ":" << f.type;
     }
 
     friend llvm::hash_code hash_value(P4::P4MLIR::BMv2IR::FieldInfo f);
-    static constexpr int kDynamic = -1;
 };
 }  // namespace P4::P4MLIR::BMv2IR
 
