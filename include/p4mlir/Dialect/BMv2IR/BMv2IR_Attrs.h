@@ -9,7 +9,6 @@
 
 #include "llvm/ADT/APSInt.h"
 #include "mlir/IR/BuiltinAttributes.h"
-#include "p4mlir/Dialect/BMv2IR/BMv2IR_Types.h"
 
 #define GET_ATTRDEF_CLASSES
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Attrs.h.inc"
