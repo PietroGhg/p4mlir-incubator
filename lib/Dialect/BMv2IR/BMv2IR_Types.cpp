@@ -58,10 +58,11 @@ llvm::LogicalResult BMv2IR::HeaderType::verify(
         return failure();
     }
 
-    unsigned numVarBits = llvm::count_if(fields, [](BMv2IR::FieldInfo field) { return isa<P4HIR::VarBitsType>(field.type); });
+    unsigned numVarBits = llvm::count_if(
+        fields, [](BMv2IR::FieldInfo field) { return isa<P4HIR::VarBitsType>(field.type); });
     if (numVarBits > 1) {
-      emitError() << "Expected at most one field with dynamic size.\n";
-      return failure();
+        emitError() << "Expected at most one field with dynamic size.\n";
+        return failure();
     }
 
     auto computedMaxLength = computeMaxLength(fields);

@@ -9,6 +9,8 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/SymbolTable.h"
+#include "p4mlir/Dialect/BMv2IR/BMv2IR_Attrs.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Types.h"
 
 #define GET_OP_CLASSES

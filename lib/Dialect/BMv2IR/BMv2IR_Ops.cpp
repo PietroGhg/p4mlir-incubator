@@ -1,5 +1,6 @@
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Ops.h"
 
+#include "mlir/IR/Builders.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.h"
 
 using namespace P4::P4MLIR;
