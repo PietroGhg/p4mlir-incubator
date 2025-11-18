@@ -12,5 +12,6 @@
 
 #define GET_ATTRDEF_CLASSES
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Attrs.h.inc"
+#include "p4mlir/Dialect/BMv2IR/BMv2IR_EnumAttrs.h.inc"
 
 #endif  // P4MLIR_DIALECT_BMv2IR_BMv2IR_ATTRS_H

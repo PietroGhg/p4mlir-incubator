@@ -76,7 +76,7 @@ def BMv2_ExtractOp : BMv2IR_Op<"extract", [HasParent<"ParserStateOp">]> {
   
   // TODO: don't use strings
   let arguments = (ins
-    StrAttr:$extract_type,
+    BMv2IR_ExtractKindAttr:$extract_type,
     StrAttr:$value,
     OptionalAttr<StrAttr>:$union_member
   );

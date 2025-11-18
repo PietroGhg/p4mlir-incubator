@@ -3,6 +3,7 @@
 
 include "mlir/IR/BuiltinAttributeInterfaces.td"
 include "mlir/IR/CommonAttrConstraints.td"
+include "mlir/IR/EnumAttr.td"
 
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.td"
 
@@ -10,6 +11,18 @@ class BMv2IR_Attr<string name, string attrMnemonic, list<Trait> traits = []>
     : AttrDef<BMv2IR_Dialect, name, traits> {
   let mnemonic = attrMnemonic;
 }
+
+def BMv2IR_ExtractKind : IntEnum<"ExtractKind",
+    "BMv2 extract operation kind",
+    [
+      I32EnumAttrCase<"Regular", 0, "regular">,
+      I32EnumAttrCase<"Stack", 1, "stack">,
+      I32EnumAttrCase<"UnionStack", 2, "union_stack">
+    ], 32> {
+  let cppNamespace = "P4::P4MLIR::BMv2IR";
+}
+
+def BMv2IR_ExtractKindAttr : EnumAttr<BMv2IR_Dialect, BMv2IR_ExtractKind, "extract_kind">;
 
 def BMv2_FieldAttr : BMv2IR_Attr<"Field", "field"> {
   let summary = "BMv2 header field access";

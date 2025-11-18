@@ -55,6 +55,7 @@ struct ExtractOpConversionPattern : public OpConversionPattern<P4CoreLib::Packet
 
     LogicalResult matchAndRewrite(P4CoreLib::PacketExtractOp op, OpAdaptor operands,
                                   ConversionPatternRewriter &rewriter) const override {
+        auto context = op.getContext();
         auto fieldRefOp = op.getHdr().getDefiningOp<P4HIR::StructFieldRefOp>();
         if (!fieldRefOp) return failure();
         auto fieldName = fieldRefOp.getFieldName();
@@ -62,7 +63,8 @@ struct ExtractOpConversionPattern : public OpConversionPattern<P4CoreLib::Packet
         // TODO: don't hardcode strings
         // TODO: support non-regular extracts
         auto newExtract = rewriter.create<BMv2IR::ExtractOp>(
-            loc, rewriter.getStringAttr("regular"), rewriter.getStringAttr(fieldName), nullptr);
+            loc, BMv2IR::ExtractKindAttr::get(context, BMv2IR::ExtractKind::Regular),
+            rewriter.getStringAttr(fieldName), nullptr);
         rewriter.replaceOp(op, newExtract);
         rewriter.eraseOp(fieldRefOp);
         return success();
@@ -109,8 +111,8 @@ struct ParserStateOpConversionPattern : public OpConversionPattern<P4HIR::Parser
             transitions.push_back(transition);
             eraseList.insert(acceptOp.getOperation());
         });
-        //TODO: p4c raises a warning "Explicit transition to reject not supported on this target"
-        // for explicit transitions to reject
+        // TODO: p4c raises a warning "Explicit transition to reject not supported on this target"
+        //  for explicit transitions to reject
         op.walk([&](P4HIR::ParserRejectOp rejectOp) {
             auto transition = BMv2IR::TransitionAttr::get(
                 context, rewriter.getStringAttr("default"), nullptr, nullptr, nullptr);
@@ -118,8 +120,9 @@ struct ParserStateOpConversionPattern : public OpConversionPattern<P4HIR::Parser
             eraseList.insert(rejectOp.getOperation());
         });
         auto newState = rewriter.create<BMv2IR::ParserStateOp>(
-            loc, op.getSymNameAttr(), rewriter.getArrayAttr(transitions), rewriter.getArrayAttr(transitionKeys));
-        auto& region = newState.getRegion();
+            loc, op.getSymNameAttr(), rewriter.getArrayAttr(transitions),
+            rewriter.getArrayAttr(transitionKeys));
+        auto &region = newState.getRegion();
         region.takeBody(op.getRegion());
         for (Operation *op : eraseList) rewriter.eraseOp(op);
         rewriter.replaceOp(op, newState);
@@ -181,9 +184,10 @@ struct ParserOpConversionPattern : public OpConversionPattern<P4HIR::ParserOp> {
         auto loc = op.getLoc();
         auto firstTransition = cast<P4HIR::ParserTransitionOp>(op.getBody().back().getTerminator());
         auto initState = firstTransition.getNextState();
-        auto newParser = rewriter.create<BMv2IR::ParserOp>(loc, op.getSymNameAttr(), initState.getSymbolRef());
+        auto newParser =
+            rewriter.create<BMv2IR::ParserOp>(loc, op.getSymNameAttr(), initState.getSymbolRef());
         rewriter.eraseOp(firstTransition);
-        auto& region = newParser.getRegion();
+        auto &region = newParser.getRegion();
         region.takeBody(op.getRegion());
         rewriter.replaceOp(op, newParser);
         return success();
