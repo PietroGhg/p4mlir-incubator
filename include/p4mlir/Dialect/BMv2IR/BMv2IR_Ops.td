@@ -57,8 +57,8 @@ def ParserStateOp : BMv2IR_Op<"state",
   
   let assemblyFormat = [{
     $sym_name
-    (`transition_key` $transition_key^)?
-    (`transitions` $transitions^)?
+    (`\n``transition_key` $transition_key^)?
+    (`\n``transitions` $transitions^)?
     $parser_ops attr-dict
   }];
 }

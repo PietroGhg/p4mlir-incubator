@@ -2,6 +2,7 @@
 #define P4MLIR_DIALECT_BMv2IR_BMv2IR_ATTRS_TD
 
 include "mlir/IR/BuiltinAttributeInterfaces.td"
+include "mlir/IR/CommonAttrConstraints.td"
 
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.td"
 
@@ -10,27 +11,68 @@ class BMv2IR_Attr<string name, string attrMnemonic, list<Trait> traits = []>
   let mnemonic = attrMnemonic;
 }
 
-def BMv2_TransitionKeyAttr : BMv2IR_Attr<"TransitionKey", "transition-key"> {
-  let summary = "Transition key";
+def BMv2_FieldAttr : BMv2IR_Attr<"Field", "field"> {
+  let summary = "BMv2 header field access";
   let description = [{
-    Represents a field in the parse state transition key.
-    
-    Types:
-    - field: regular field reference
-    - stack_field: field of last extracted instance in a stack
-    - union_stack_field: field of last extracted instance in union stack
-    - lookahead: lookahead field
+    Represents access to a field within a header instance.
+    Contains a 2-tuple: (header_instance_name, field_member_name)
   }];
   
-  // TODO: don't use strings here
   let parameters = (ins
-    "mlir::StringAttr":$type,    // "field", "stack_field", "union_stack_field", "lookahead"
-    "mlir::StringAttr":$value    // field name or lookahead specification
+    "mlir::StringAttr":$headerInstance,
+    "mlir::StringAttr":$fieldMember
   );
   
-  let mnemonic = "transition_key";
-  let assemblyFormat = "`<` $type `,` $value `>`";
+  let assemblyFormat = "`<` $headerInstance `,` $fieldMember `>`";
 }
+
+def BMv2_StackFieldAttr : BMv2IR_Attr<"StackField", "stack_field"> {
+  let summary = "BMv2 header stack field access";
+  let description = [{
+    Represents access to a field in the last valid header instance in a stack.
+    Contains a 2-tuple: (header_stack_name, field_member_name)
+  }];
+  
+  let parameters = (ins
+    "mlir::StringAttr":$headerStack,
+    "mlir::StringAttr":$fieldMember
+  );
+  
+  let assemblyFormat = "`<` $headerStack `,` $fieldMember `>`";
+}
+
+def BMv2_UnionStackFieldAttr : BMv2IR_Attr<"UnionStackField", "union_stack_field"> {
+  let summary = "BMv2 header union stack field access";
+  let description = [{
+    Represents access to a field in the last valid union instance in a stack.
+    Contains a 3-tuple: (header_union_stack_name, union_member_name, field_member_name)
+  }];
+  
+  let parameters = (ins
+    "mlir::StringAttr":$headerUnionStack,
+    "mlir::StringAttr":$unionMember,
+    "mlir::StringAttr":$fieldMember
+  );
+  
+  let assemblyFormat = "`<` $headerUnionStack `,` $unionMember `,` $fieldMember `>`";
+}
+
+def BMv2_LookaheadAttr : BMv2IR_Attr<"Lookahead", "lookahead"> {
+  let summary = "BMv2 parser lookahead";
+  let description = [{
+    Represents a lookahead operation in a parser.
+    Contains a 2-tuple: (bit_offset, bitwidth)
+  }];
+  
+  let parameters = (ins
+    "mlir::IntegerAttr":$bitOffset,
+    "mlir::IntegerAttr":$bitwidth
+  );
+  
+  let assemblyFormat = "`<` $bitOffset `,` $bitwidth `>`";
+}
+
+def BMv2_TransitionKeyAttr : AnyAttrOf<[BMv2_FieldAttr, BMv2_StackFieldAttr, BMv2_UnionStackFieldAttr, BMv2_LookaheadAttr]>;
 
 def BMv2_Transition: BMv2IR_Attr<"Transition", "transition"> {
   let summary = "Parser transition";
@@ -53,11 +95,10 @@ def BMv2_Transition: BMv2IR_Attr<"Transition", "transition"> {
   let parameters = (ins
     "mlir::StringAttr":$type,                              // "default", "hexstr", "parse_vset"
     OptionalParameter<"mlir::SymbolRefAttr">:$next_state, // next state name or null
-    OptionalParameter<"mlir::StringAttr">:$value,            // hexstr value or vset name (null if default)
-    OptionalParameter<"mlir::StringAttr">:$mask             // mask hexstr or null
+    OptionalParameter<"mlir::Attribute">:$value,            // hexstr value or vset name (null if default)
+    OptionalParameter<"mlir::Attribute">:$mask             // mask hexstr or null
   );
   
-  let mnemonic = "trans_spec";
   let assemblyFormat = "`<` $type (`,` $value^)? (`,` $mask^)? (`,` $next_state^)? `>`";
 }
 
