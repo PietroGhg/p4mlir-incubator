@@ -79,10 +79,10 @@ struct ParserStateOpConversionPattern : public OpConversionPattern<P4HIR::Parser
         auto context = rewriter.getContext();
 
         SmallVector<Operation *> eraseList;
-        SmallVector<Attribute> transitionKeys;
-        auto newState = rewriter.create<BMv2IR::ParserStateOp>(loc, op.getSymNameAttr(),
-                                                               rewriter.getArrayAttr({}));
+
+        auto newState = rewriter.create<BMv2IR::ParserStateOp>(loc, op.getSymNameAttr());
         auto &transitionBlock = newState.getTransitions().emplaceBlock();
+        auto &keysBlock = newState.getTransitionKeys().emplaceBlock();
         op.walk([&](P4HIR::ParserTransitionOp transitionOp) {
             ConversionPatternRewriter::InsertionGuard guard(rewriter);
             rewriter.setInsertionPointToEnd(&transitionBlock);
@@ -96,8 +96,9 @@ struct ParserStateOpConversionPattern : public OpConversionPattern<P4HIR::Parser
         bool transitionInserted = true;
         op.walk([&](P4HIR::ParserTransitionSelectOp transitionSelectOp) {
             for (auto operand : transitionSelectOp.getArgs()) {
-                auto transitionKey = getTransitionKey(operand.getDefiningOp(), rewriter);
-                transitionKeys.push_back(transitionKey);
+                auto transitionKey =
+                    insertTransitionKey(operand.getDefiningOp(), rewriter, &keysBlock);
+                transitionInserted &= transitionKey != nullptr;
             }
 
             for (auto &block : transitionSelectOp.getBody().getBlocks()) {
@@ -136,7 +137,6 @@ struct ParserStateOpConversionPattern : public OpConversionPattern<P4HIR::Parser
         // Move the remaning parser ops to their region, they will be converted by the other
         // patterns
         newState.getParserOps().takeBody(op.getBody());
-        newState.setTransitionKeyAttr(rewriter.getArrayAttr(transitionKeys));
         for (auto op : eraseList) rewriter.eraseOp(op);
         rewriter.replaceOp(op, newState);
 
@@ -144,21 +144,25 @@ struct ParserStateOpConversionPattern : public OpConversionPattern<P4HIR::Parser
     }
 
  private:
-    Attribute getTransitionKey(Operation *op, ConversionPatternRewriter &rewriter) const {
-        auto context = op->getContext();
+    static Operation *insertTransitionKey(Operation *op, ConversionPatternRewriter &rewriter,
+                                          Block *block) {
+        auto loc = op->getLoc();
         if (auto lookAheadOp = dyn_cast<P4CoreLib::PacketLookAheadOp>(op)) {
             // TODO: not sure how to handle offsets
             auto offset = rewriter.getI32IntegerAttr(0);
             // TODO: can PacketLookAheadOp return something other than Bit?
             auto bitTy = cast<P4HIR::BitsType>(lookAheadOp.getResult().getType());
             auto width = rewriter.getI32IntegerAttr(bitTy.getWidth());
-            return BMv2IR::LookaheadAttr::get(context, offset, width);
+            ConversionPatternRewriter::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToEnd(block);
+            return rewriter.create<BMv2IR::LookaheadOp>(loc, offset, width);
         }
         llvm_unreachable("Unsupported operand");
     }
 
-    BMv2IR::TransitionOp insertTransition(P4HIR::ParserSelectCaseOp caseOp,
-                                          ConversionPatternRewriter &rewriter, Block *block) const {
+    static BMv2IR::TransitionOp insertTransition(P4HIR::ParserSelectCaseOp caseOp,
+                                                 ConversionPatternRewriter &rewriter,
+                                                 Block *block) {
         auto context = caseOp.getContext();
         auto keysets = caseOp.getSelectKeys();
         auto loc = caseOp.getLoc();

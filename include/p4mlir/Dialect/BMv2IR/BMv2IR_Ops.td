@@ -48,19 +48,26 @@ def BMv2IR_ParserStateOp : BMv2IR_Op<"state",
    [HasParent<"ParserOp">,
     Symbol, NoTerminator]> {
   let arguments = (ins
-    SymbolNameAttr:$sym_name,
-    OptionalAttr<BMv2_TransitionKeyArrayAttr>:$transition_key
+    SymbolNameAttr:$sym_name
   );
+  let description = [{ 
+    Represents a BMv2 parse state.
+    The op has 3 regions, which match the JSON format for parse states:
+    - parser_ops contains the operations performed by the state to parse the header
+    - transition_keys contains the keys from select transitions
+    - transitions contains the actual transitions
+  }];
   
   let regions = (region 
       SizedRegion<1>:$parser_ops,
-      SizedRegion<1>:$transitions);
+      SizedRegion<1>:$transitions,
+      SizedRegion<1>:$transition_keys);
   
   let assemblyFormat = [{
     $sym_name
-    (`\n``transition_key` $transition_key^)?
-    `\n` `transitions` $transitions
-    `parser_ops` $parser_ops attr-dict
+    `\n``transition_key` $transition_keys
+    `\n``transitions` $transitions
+    `\n``parser_ops` $parser_ops attr-dict
   }];
 }
 
@@ -78,18 +85,20 @@ def BMv2IR_TransitionOp : BMv2IR_Op<"transition", [HasParent<"ParserStateOp">]> 
     spec (concatenation of byte-padded fields). For example, if the transition
     key has a 12-bit field and a 2-bit field, values use 3 bytes (0x0aba03).
     
-    next_state can be null for the last state in the parser.
+    `next_state` can be null for the last state in the parser.
+    `value` is the hexstr value or vset name (null if default)
+    `mask` is the mask (if needed) for the hexstr
   }];
   
   // TODO: refine value and mask fields
   let arguments = (ins
-    BMv2IR_TransitionKindAttr:$type,                              // "default", "hexstr", "parse_vset"
-    OptionalAttr<SymbolRefAttr>:$next_state, // next state name or null
-    OptionalAttr<AnyAttr>:$value,            // hexstr value or vset name (null if default)
-    OptionalAttr<AnyAttr>:$mask             // mask hexstr or null
+    BMv2IR_TransitionKindAttr:$type,
+    OptionalAttr<SymbolRefAttr>:$next_state,
+    OptionalAttr<AnyAttr>:$value,
+    OptionalAttr<AnyAttr>:$mask
   );
   
-  let assemblyFormat = "`<` $type (`,` $value^)? (`,` $mask^)? (`,` $next_state^)? `>` attr-dict";
+  let assemblyFormat = "`type`$type (`,` $value^)? (`,` $mask^)? (`,` $next_state^)? attr-dict";
 }
 
 
@@ -113,6 +122,73 @@ def BMv2_ExtractOp : BMv2IR_Op<"extract", [HasParent<"ParserStateOp">]> {
   let assemblyFormat = [{
     $extract_type $value (`union_member` $union_member^)? attr-dict
   }];
+}
+
+//===-------------------------------------------------------------------------------------------===//
+// BMv2 type-value fields
+// see https://github.com/p4lang/behavioral-model/blob/main/docs/JSON_format.md#the-type-value-object
+//===-------------------------------------------------------------------------------------------===//
+
+def BMv2IR_FieldOp : BMv2IR_Op<"field"> {
+  let summary = "BMv2 header field access";
+  let description = [{
+    Represents access to a field within a header instance.
+    Contains a 2-tuple: (header_instance_name, field_member_name)
+  }];
+  
+  let arguments = (ins
+    StrAttr:$headerInstance,
+    StrAttr:$fieldMember
+  );
+  
+  let assemblyFormat = "`<` $headerInstance `,` $fieldMember `>` attr-dict";
+}
+
+def BMv2_StackFieldOp : BMv2IR_Op<"stack_field"> {
+  let summary = "BMv2 header stack field access";
+  let description = [{
+    Represents access to a field in the last valid header instance in a stack.
+    Contains a 2-tuple: (header_stack_name, field_member_name)
+  }];
+  
+  let arguments = (ins
+    StrAttr:$headerStack,
+    StrAttr:$fieldMember
+  );
+  
+  let assemblyFormat = "`<` $headerStack `,` $fieldMember `>` attr-dict";
+}
+
+
+def BMv2IR_LookaheadOp : BMv2IR_Op<"lookahead"> {
+  let summary = "BMv2 parser lookahead";
+  let description = [{
+    Represents a lookahead operation in a parser.
+    Contains a 2-tuple: (bit_offset, bitwidth)
+  }];
+  
+  let arguments = (ins
+    I32Attr:$bitOffset,
+    I32Attr:$bitwidth
+  );
+  
+  let assemblyFormat = "`<` $bitOffset `,` $bitwidth `>` attr-dict";
+}
+
+def BMv2_UnionStackFieldOp : BMv2IR_Op<"union_stack_field"> {
+  let summary = "BMv2 header union stack field access";
+  let description = [{
+    Represents access to a field in the last valid union instance in a stack.
+    Contains a 3-tuple: (header_union_stack_name, union_member_name, field_member_name)
+  }];
+  
+  let arguments = (ins
+    StrAttr:$headerUnionStack,
+    StrAttr:$unionMember,
+    StrAttr:$fieldMember
+  );
+  
+  let assemblyFormat = "`<` $headerUnionStack `,` $unionMember `,` $fieldMember `>` attr-dict";
 }
 
 #endif // P4MLIR_DIALECT_BMv2IR_BMv2IR_OPS_TD
