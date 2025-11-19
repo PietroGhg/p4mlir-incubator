@@ -24,6 +24,18 @@ def BMv2IR_ExtractKind : IntEnum<"ExtractKind",
 
 def BMv2IR_ExtractKindAttr : EnumAttr<BMv2IR_Dialect, BMv2IR_ExtractKind, "extract_kind">;
 
+def BMv2IR_TransitionKind : IntEnum<"TransitionKind",
+    "BMv2 extract operation kind",
+    [
+      I32EnumAttrCase<"Default", 0, "default">,
+      I32EnumAttrCase<"Hexstr", 1, "hexstr">,
+      I32EnumAttrCase<"Parse_vset", 2, "parse_vset">
+    ], 32> {
+  let cppNamespace = "P4::P4MLIR::BMv2IR";
+}
+
+def BMv2IR_TransitionKindAttr : EnumAttr<BMv2IR_Dialect, BMv2IR_TransitionKind, "transition_kind">;
+
 def BMv2_FieldAttr : BMv2IR_Attr<"Field", "field"> {
   let summary = "BMv2 header field access";
   let description = [{
@@ -87,38 +99,7 @@ def BMv2_LookaheadAttr : BMv2IR_Attr<"Lookahead", "lookahead"> {
 
 def BMv2_TransitionKeyAttr : AnyAttrOf<[BMv2_FieldAttr, BMv2_StackFieldAttr, BMv2_UnionStackFieldAttr, BMv2_LookaheadAttr]>;
 
-def BMv2_Transition: BMv2IR_Attr<"Transition", "transition"> {
-  let summary = "Parser transition";
-  let description = [{
-    Represents a single transition from a parse state.
-    
-    Types:
-    - default: default transition (no value/mask)
-    - hexstr: value-based transition with hexstring
-    - parse_vset: parse value-set based transition
-    
-    The value and mask are hexstrings in the format described in the BMv2 JSON
-    spec (concatenation of byte-padded fields). For example, if the transition
-    key has a 12-bit field and a 2-bit field, values use 3 bytes (0x0aba03).
-    
-    next_state can be null for the last state in the parser.
-  }];
-  
-  // TODO: refine this, don't use strings
-  let parameters = (ins
-    "mlir::StringAttr":$type,                              // "default", "hexstr", "parse_vset"
-    OptionalParameter<"mlir::SymbolRefAttr">:$next_state, // next state name or null
-    OptionalParameter<"mlir::Attribute">:$value,            // hexstr value or vset name (null if default)
-    OptionalParameter<"mlir::Attribute">:$mask             // mask hexstr or null
-  );
-  
-  let assemblyFormat = "`<` $type (`,` $value^)? (`,` $mask^)? (`,` $next_state^)? `>`";
-}
-
 def BMv2_TransitionKeyArrayAttr : 
     TypedArrayAttrBase<BMv2_TransitionKeyAttr, "array of transition keys">;
-
-def BMv2_TransitionArrayAttr : 
-    TypedArrayAttrBase<BMv2_Transition, "array of transition specs">;
 
 #endif // P4MLIR_DIALECT_BMv2IR_BMv2IR_ATTRS_TD

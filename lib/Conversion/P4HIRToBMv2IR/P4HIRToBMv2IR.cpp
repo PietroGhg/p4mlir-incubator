@@ -1,3 +1,4 @@
+#include <iterator>
 #include <optional>
 
 #include "llvm/ADT/SmallPtrSet.h"
@@ -60,7 +61,6 @@ struct ExtractOpConversionPattern : public OpConversionPattern<P4CoreLib::Packet
         if (!fieldRefOp) return failure();
         auto fieldName = fieldRefOp.getFieldName();
         auto loc = op.getLoc();
-        // TODO: don't hardcode strings
         // TODO: support non-regular extracts
         auto newExtract = rewriter.create<BMv2IR::ExtractOp>(
             loc, BMv2IR::ExtractKindAttr::get(context, BMv2IR::ExtractKind::Regular),
@@ -77,18 +77,23 @@ struct ParserStateOpConversionPattern : public OpConversionPattern<P4HIR::Parser
                                   ConversionPatternRewriter &rewriter) const override {
         auto loc = op.getLoc();
         auto context = rewriter.getContext();
-        SmallVector<Attribute> transitions;
-        SmallVector<Attribute> transitionKeys;
-        SmallPtrSet<Operation *, 3> eraseList;
 
+        SmallVector<Operation *> eraseList;
+        SmallVector<Attribute> transitionKeys;
+        auto newState = rewriter.create<BMv2IR::ParserStateOp>(loc, op.getSymNameAttr(),
+                                                               rewriter.getArrayAttr({}));
+        auto &transitionBlock = newState.getTransitions().emplaceBlock();
         op.walk([&](P4HIR::ParserTransitionOp transitionOp) {
-            auto transition =
-                BMv2IR::TransitionAttr::get(context, rewriter.getStringAttr("default"),
-                                            transitionOp.getStateAttr(), nullptr, nullptr);
-            transitions.push_back(transition);
-            eraseList.insert(transitionOp.getOperation());
+            ConversionPatternRewriter::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToEnd(&transitionBlock);
+            rewriter.create<BMv2IR::TransitionOp>(
+                transitionOp.getLoc(),
+                BMv2IR::TransitionKindAttr::get(context, BMv2IR::TransitionKind::Default),
+                transitionOp.getStateAttr(), nullptr, nullptr);
+            eraseList.push_back(transitionOp.getOperation());
         });
 
+        bool transitionInserted = true;
         op.walk([&](P4HIR::ParserTransitionSelectOp transitionSelectOp) {
             for (auto operand : transitionSelectOp.getArgs()) {
                 auto transitionKey = getTransitionKey(operand.getDefiningOp(), rewriter);
@@ -98,33 +103,41 @@ struct ParserStateOpConversionPattern : public OpConversionPattern<P4HIR::Parser
             for (auto &block : transitionSelectOp.getBody().getBlocks()) {
                 for (auto &op : block) {
                     auto selectOp = cast<P4HIR::ParserSelectCaseOp>(op);
-                    auto transition = getTransition(selectOp, rewriter);
-                    transitions.push_back(transition);
+                    auto transition = insertTransition(selectOp, rewriter, &transitionBlock);
+                    transitionInserted &= transition != nullptr;
                 }
             }
-            eraseList.insert(transitionSelectOp);
+            eraseList.push_back(transitionSelectOp);
         });
 
+        if (!transitionInserted) return failure();
+
         op.walk([&](P4HIR::ParserAcceptOp acceptOp) {
-            auto transition = BMv2IR::TransitionAttr::get(
-                context, rewriter.getStringAttr("default"), nullptr, nullptr, nullptr);
-            transitions.push_back(transition);
-            eraseList.insert(acceptOp.getOperation());
+            ConversionPatternRewriter::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToEnd(&transitionBlock);
+            rewriter.create<BMv2IR::TransitionOp>(
+                acceptOp.getLoc(),
+                BMv2IR::TransitionKindAttr::get(context, BMv2IR::TransitionKind::Default), nullptr,
+                nullptr, nullptr);
+            eraseList.push_back(acceptOp.getOperation());
         });
         // TODO: p4c raises a warning "Explicit transition to reject not supported on this target"
         //  for explicit transitions to reject
         op.walk([&](P4HIR::ParserRejectOp rejectOp) {
-            auto transition = BMv2IR::TransitionAttr::get(
-                context, rewriter.getStringAttr("default"), nullptr, nullptr, nullptr);
-            transitions.push_back(transition);
-            eraseList.insert(rejectOp.getOperation());
+            ConversionPatternRewriter::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToEnd(&transitionBlock);
+            rewriter.create<BMv2IR::TransitionOp>(
+                rejectOp.getLoc(),
+                BMv2IR::TransitionKindAttr::get(context, BMv2IR::TransitionKind::Default), nullptr,
+                nullptr, nullptr);
+            eraseList.push_back(rejectOp.getOperation());
         });
-        auto newState = rewriter.create<BMv2IR::ParserStateOp>(
-            loc, op.getSymNameAttr(), rewriter.getArrayAttr(transitions),
-            rewriter.getArrayAttr(transitionKeys));
-        auto &region = newState.getRegion();
-        region.takeBody(op.getRegion());
-        for (Operation *op : eraseList) rewriter.eraseOp(op);
+
+        // Move the remaning parser ops to their region, they will be converted by the other
+        // patterns
+        newState.getParserOps().takeBody(op.getBody());
+        newState.setTransitionKeyAttr(rewriter.getArrayAttr(transitionKeys));
+        for (auto op : eraseList) rewriter.eraseOp(op);
         rewriter.replaceOp(op, newState);
 
         return success();
@@ -144,14 +157,15 @@ struct ParserStateOpConversionPattern : public OpConversionPattern<P4HIR::Parser
         llvm_unreachable("Unsupported operand");
     }
 
-    BMv2IR::TransitionAttr getTransition(P4HIR::ParserSelectCaseOp caseOp,
-                                         ConversionPatternRewriter &rewriter) const {
+    BMv2IR::TransitionOp insertTransition(P4HIR::ParserSelectCaseOp caseOp,
+                                          ConversionPatternRewriter &rewriter, Block *block) const {
         auto context = caseOp.getContext();
         auto keysets = caseOp.getSelectKeys();
+        auto loc = caseOp.getLoc();
 
         for (auto entry : keysets) {
-            return TypeSwitch<Operation *, BMv2IR::TransitionAttr>(entry.getDefiningOp())
-                .Case<P4HIR::SetOp>([&](P4HIR::SetOp setOp) -> BMv2IR::TransitionAttr {
+            return TypeSwitch<Operation *, BMv2IR::TransitionOp>(entry.getDefiningOp())
+                .Case<P4HIR::SetOp>([&](P4HIR::SetOp setOp) -> BMv2IR::TransitionOp {
                     auto inputs = setOp.getInput();
                     // TODO: check how to model multiple set entries in JSON spec
                     assert(inputs.size() == 1 && "Unhandled multiple inputs to setop");
@@ -159,15 +173,23 @@ struct ParserStateOpConversionPattern : public OpConversionPattern<P4HIR::Parser
                     auto constOp = input.getDefiningOp<P4HIR::ConstOp>();
                     // TODO error message
                     if (!constOp) return nullptr;
-                    return BMv2IR::TransitionAttr::get(context, rewriter.getStringAttr("hexstr"),
-                                                       caseOp.getStateAttr(),
-                                                       constOp.getValueAttr(), nullptr);
+                    ConversionPatternRewriter::InsertionGuard guard(rewriter);
+                    rewriter.setInsertionPointToEnd(block);
+
+                    return rewriter.create<BMv2IR::TransitionOp>(
+                        loc,
+                        BMv2IR::TransitionKindAttr::get(context, BMv2IR::TransitionKind::Hexstr),
+                        caseOp.getStateAttr(), constOp.getValueAttr(), nullptr);
                 })
                 .Case<P4HIR::ConstOp>([&](P4HIR::ConstOp constOp) {
                     if (isa<P4HIR::UniversalSetAttr>(constOp.getValueAttr())) {
-                        return BMv2IR::TransitionAttr::get(context,
-                                                           rewriter.getStringAttr("default"),
-                                                           caseOp.getStateAttr(), nullptr, nullptr);
+                        ConversionPatternRewriter::InsertionGuard guard(rewriter);
+                        rewriter.setInsertionPointToEnd(block);
+                        return rewriter.create<BMv2IR::TransitionOp>(
+                            loc,
+                            BMv2IR::TransitionKindAttr::get(context,
+                                                            BMv2IR::TransitionKind::Default),
+                            caseOp.getStateAttr(), nullptr, nullptr);
                     }
                     llvm_unreachable("Unhandled ConstOp");
                 });
