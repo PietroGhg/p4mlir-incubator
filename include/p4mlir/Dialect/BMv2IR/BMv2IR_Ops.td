@@ -8,6 +8,7 @@ include "mlir/IR/SymbolInterfaces.td"
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.td"
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Types.td"
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Attrs.td"
+include "p4mlir/Dialect/BMv2IR/BMv2IR_OpInterfaces.td"
 
 //===----------------------------------------------------------------------===//
 // Base BMv2IR operation definition.
@@ -69,6 +70,8 @@ def BMv2IR_ParserStateOp : BMv2IR_Op<"state",
     `\n``transitions` $transitions
     `\n``parser_ops` $parser_ops attr-dict
   }];
+
+  let hasVerifier = 1;
 }
 
 def BMv2IR_TransitionOp : BMv2IR_Op<"transition", [HasParent<"ParserStateOp">]> {
@@ -102,7 +105,7 @@ def BMv2IR_TransitionOp : BMv2IR_Op<"transition", [HasParent<"ParserStateOp">]> 
 }
 
 
-def BMv2_ExtractOp : BMv2IR_Op<"extract", [HasParent<"ParserStateOp">]> {
+def BMv2_ExtractOp : BMv2IR_Op<"extract", [HasParent<"ParserStateOp">, AllowedParserOp]> {
   let summary = "Extract header operation";
   let description = [{
     Extracts the field of a header instance, header stack, or union stack element.
@@ -129,7 +132,7 @@ def BMv2_ExtractOp : BMv2IR_Op<"extract", [HasParent<"ParserStateOp">]> {
 // see https://github.com/p4lang/behavioral-model/blob/main/docs/JSON_format.md#the-type-value-object
 //===-------------------------------------------------------------------------------------------===//
 
-def BMv2IR_FieldOp : BMv2IR_Op<"field"> {
+def BMv2IR_FieldOp : BMv2IR_Op<"field", [AllowedTransitionKey]> {
   let summary = "BMv2 header field access";
   let description = [{
     Represents access to a field within a header instance.
@@ -144,7 +147,7 @@ def BMv2IR_FieldOp : BMv2IR_Op<"field"> {
   let assemblyFormat = "`<` $headerInstance `,` $fieldMember `>` attr-dict";
 }
 
-def BMv2_StackFieldOp : BMv2IR_Op<"stack_field"> {
+def BMv2_StackFieldOp : BMv2IR_Op<"stack_field", [AllowedTransitionKey]> {
   let summary = "BMv2 header stack field access";
   let description = [{
     Represents access to a field in the last valid header instance in a stack.
@@ -160,7 +163,7 @@ def BMv2_StackFieldOp : BMv2IR_Op<"stack_field"> {
 }
 
 
-def BMv2IR_LookaheadOp : BMv2IR_Op<"lookahead"> {
+def BMv2IR_LookaheadOp : BMv2IR_Op<"lookahead", [AllowedTransitionKey]> {
   let summary = "BMv2 parser lookahead";
   let description = [{
     Represents a lookahead operation in a parser.
@@ -175,7 +178,7 @@ def BMv2IR_LookaheadOp : BMv2IR_Op<"lookahead"> {
   let assemblyFormat = "`<` $bitOffset `,` $bitwidth `>` attr-dict";
 }
 
-def BMv2_UnionStackFieldOp : BMv2IR_Op<"union_stack_field"> {
+def BMv2_UnionStackFieldOp : BMv2IR_Op<"union_stack_field", [AllowedTransitionKey]> {
   let summary = "BMv2 header union stack field access";
   let description = [{
     Represents access to a field in the last valid union instance in a stack.

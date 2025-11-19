@@ -58,7 +58,6 @@ module {
 // CHECK:      bmv2ir.transition type  default, @prs::@parse_bottom
 // CHECK:    }
 // CHECK:     parser_ops {
-// CHECK:      %lookahead = p4corelib.packet_lookahead %arg0 : !p4corelib.packet_in -> !b8i
 // CHECK:    }
     p4hir.state @parse_one {
       %one_field_ref = p4hir.struct_field_ref %arg1["one"] : <!Headers_t>
