@@ -10,12 +10,54 @@ include "p4mlir/Dialect/BMv2IR/BMv2IR_Types.td"
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Attrs.td"
 include "p4mlir/Dialect/BMv2IR/BMv2IR_OpInterfaces.td"
 
+include "p4mlir/Dialect/P4HIR/P4HIR_Types.td"
+
+
 //===----------------------------------------------------------------------===//
 // Base BMv2IR operation definition.
 //===----------------------------------------------------------------------===//
 
 class BMv2IR_Op<string mnemonic, list<Trait> traits = []> :
         Op<BMv2IR_Dialect, mnemonic, traits>;
+
+def BMv2IR_HeaderInstanceOp : BMv2IR_Op<"header_instance", [
+    Symbol
+  ]> {
+  let summary = "Declares a header instance as a global variable";
+  let description = [{
+    Represents a header instance in a P4 program. Header instances
+    are modeled similarly to global variables, and referenced by Symbol name by other ops.
+    
+    The operation has a symbol name and references a header type. It can be
+    marked as metadata to distinguish metadata instances from regular header
+    instances.
+  }];
+  
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    TypeAttr:$header_type,
+    DefaultValuedAttr<BoolAttr, "false">:$metadata
+  );
+
+  let results = (outs
+    AnyType:$result
+  );
+  
+  let assemblyFormat = [{
+    $sym_name `:` $header_type attr-dict `->` type($result)
+  }];
+  
+  let builders = [
+    OpBuilder<(ins "mlir::StringRef":$name, "mlir::Type":$headerType), [{
+      build($_builder, $_state, headerType, $_builder.getStringAttr(name), 
+            TypeAttr::get(headerType), $_builder.getBoolAttr(false));
+    }]>,
+    OpBuilder<(ins "mlir::StringRef":$name, "mlir::Type":$headerType, "bool":$isMetadata), [{
+      build($_builder, $_state, headerType, $_builder.getStringAttr(name), 
+            TypeAttr::get(headerType), $_builder.getBoolAttr(isMetadata));
+    }]>
+  ];
+}
 
 def BMv2IR_ParserOp : BMv2IR_Op<"parser", [
     Symbol, SymbolTable,
@@ -118,12 +160,12 @@ def BMv2_ExtractOp : BMv2IR_Op<"extract", [HasParent<"ParserStateOp">, AllowedPa
   
   let arguments = (ins
     BMv2IR_ExtractKindAttr:$extract_type,
-    StrAttr:$value,
+    SymbolRefAttr:$header_instance,
     OptionalAttr<StrAttr>:$union_member
   );
   
   let assemblyFormat = [{
-    $extract_type $value (`union_member` $union_member^)? attr-dict
+    $extract_type $header_instance (`union_member` $union_member^)? attr-dict
   }];
 }
 

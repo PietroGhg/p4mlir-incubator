@@ -10,6 +10,8 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Types.h"
+#include "mlir/Support/LLVM.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Attrs.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_OpInterfaces.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Types.h"

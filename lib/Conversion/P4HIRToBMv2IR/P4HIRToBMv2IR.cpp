@@ -57,14 +57,13 @@ struct ExtractOpConversionPattern : public OpConversionPattern<P4CoreLib::Packet
         auto referredTy = hdr.getType().getObjectType();
         if (!isa<P4HIR::HeaderType>(referredTy))
             return op->emitError("Only headers supported as BMv2 extract arguments");
-        auto fieldRefOp = op.getHdr().getDefiningOp<P4HIR::StructFieldRefOp>();
-        if (!fieldRefOp) return op->emitError("Unsupported extract argument");
-        auto fieldName = fieldRefOp.getFieldName();
+        auto headerInstanceOp = op.getHdr().getDefiningOp<BMv2IR::HeaderInstanceOp>();
+        if (!headerInstanceOp) return op->emitError("Unsupported extract argument");
+        auto fieldName = headerInstanceOp.getSymName();
         // TODO: support non-regular extracts
         rewriter.replaceOpWithNewOp<BMv2IR::ExtractOp>(
             op, BMv2IR::ExtractKindAttr::get(context, BMv2IR::ExtractKind::Regular),
-            rewriter.getStringAttr(fieldName), nullptr);
-        rewriter.eraseOp(fieldRefOp);
+            SymbolRefAttr::get(rewriter.getContext(), fieldName), nullptr);
         return success();
     }
 };

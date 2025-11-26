@@ -16,7 +16,7 @@ class BMv2IR_Type<string name, string typeMnemonic, list<Trait> traits = []>
 }
 
 // P4HeaderType represents a complete header type definition
-def BMv2_HeaderType : BMv2IR_Type<"Header", "header"> {
+def BMv2IR_HeaderType : BMv2IR_Type<"Header", "header"> {
   let summary = "BMv2 header type";
   let description = [{
     Represents a P4 header according to the

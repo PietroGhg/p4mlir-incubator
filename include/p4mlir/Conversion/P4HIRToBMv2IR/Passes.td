@@ -21,4 +21,23 @@ def P4HIRToBmv2IR : Pass<"p4hir-to-bmv2ir", "mlir::ModuleOp"> {
   ];
 }
 
+def LowerToHeaderInstance : Pass<"lower-to-header-instance", "mlir::ModuleOp"> {
+  let summary = "Lowers function arguments and local variables to header instances";
+  let description = [{
+    In BMv2 there is no concept of funcation arguments and local variables for header,
+    everything lives in the same "global" space, the 
+    [headers](https://github.com/p4lang/behavioral-model/blob/main/docs/JSON_format.md#headers)
+    JSON node.
+    To replicate this behaviour, this pass traverses the IR looking for function arguments and
+    local variables whose type is either a header or a struct containing headers, it adds
+    header_instance ops for it and replaces uses of the header (or the struct's fields) with the
+    global instance.
+  }];
+  let dependentDialects = [
+      "::P4::P4MLIR::P4HIR::P4HIRDialect",
+      "::P4::P4MLIR::P4CoreLib::P4CoreLibDialect",
+      "::P4::P4MLIR::BMv2IR::BMv2IRDialect",
+  ];
+}
+
 #endif // P4MLIR_CONVERSION_P4HIRToBMv2IR_PASSES_TD

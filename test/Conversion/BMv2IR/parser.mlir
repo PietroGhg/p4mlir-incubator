@@ -1,6 +1,5 @@
 // RUN: p4mlir-opt -p='builtin.module(p4hir-to-bmv2ir)' %s | FileCheck %s
 !b16i = !p4hir.bit<16>
-!b32i = !p4hir.bit<32>
 !b8i = !p4hir.bit<8>
 !validity_bit = !p4hir.validity.bit
 #everything = #p4hir.universal_set : !p4hir.set<!p4hir.dontcare>
@@ -9,15 +8,16 @@
 !header_top = !p4hir.header<"header_top", skip: !b8i, __valid: !validity_bit>
 !header_two = !p4hir.header<"header_two", type: !b8i, data: !b16i, __valid: !validity_bit>
 #int1_b8i = #p4hir.int<1> : !b8i
-#int256_b32i = #p4hir.int<256> : !b32i
 #int2_b8i = #p4hir.int<2> : !b8i
 !Headers_t = !p4hir.struct<"Headers_t", top: !header_top, one: !header_one, two: !header_two, bottom: !header_bottom>
 module {
   p4hir.parser @prs(%arg0: !p4corelib.packet_in {p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "p"}, %arg1: !p4hir.ref<!Headers_t> {p4hir.dir = #p4hir<dir out>, p4hir.param_name = "headers"})() {
 // CHECK:  bmv2ir.parser @prs init_state @prs::@start {
+    %0 = bmv2ir.header_instance @prs1_top : !p4hir.ref<!header_top> -> !p4hir.ref<!header_top>
+    %1 = bmv2ir.header_instance @prs1_one : !p4hir.ref<!header_one> -> !p4hir.ref<!header_one>
+    %2 = bmv2ir.header_instance @prs1_two : !p4hir.ref<!header_two> -> !p4hir.ref<!header_two>
     p4hir.state @start {
-      %top_field_ref = p4hir.struct_field_ref %arg1["top"] : <!Headers_t>
-      p4corelib.extract_header %top_field_ref : <!header_top> from %arg0 : !p4corelib.packet_in
+      p4corelib.extract_header %0 : <!header_top> from %arg0 : !p4corelib.packet_in
       p4hir.transition to @prs::@parse_headers
     }
 // CHECK:    bmv2ir.state @start
@@ -27,7 +27,7 @@ module {
 // CHECK:      bmv2ir.transition type  default next_state @prs::@parse_headers
 // CHECK:    }
 // CHECK:     parser_ops {
-// CHECK:      bmv2ir.extract  regular "top"
+// CHECK:      bmv2ir.extract  regular @prs1_top
 // CHECK:    }
     p4hir.state @parse_headers {
       %lookahead = p4corelib.packet_lookahead %arg0 : !p4corelib.packet_in -> !b8i
@@ -67,8 +67,7 @@ module {
 // CHECK:     parser_ops {
 // CHECK:    }
     p4hir.state @parse_one {
-      %one_field_ref = p4hir.struct_field_ref %arg1["one"] : <!Headers_t>
-      p4corelib.extract_header %one_field_ref : <!header_one> from %arg0 : !p4corelib.packet_in
+      p4corelib.extract_header %1 : <!header_one> from %arg0 : !p4corelib.packet_in
       p4hir.transition to @prs::@parse_two
     }
 // CHECK:    bmv2ir.state @parse_one
@@ -78,12 +77,10 @@ module {
 // CHECK:      bmv2ir.transition type  default next_state @prs::@parse_two
 // CHECK:    }
 // CHECK:     parser_ops {
-// CHECK:      bmv2ir.extract  regular "one"
+// CHECK:      bmv2ir.extract  regular @prs1_one
 // CHECK:    }
     p4hir.state @parse_two {
-      %two_field_ref = p4hir.struct_field_ref %arg1["two"] : <!Headers_t>
-      p4corelib.extract_header %two_field_ref : <!header_two> from %arg0 : !p4corelib.packet_in
-      //p4hir.transition to @prs::@parse_headers
+      p4corelib.extract_header %2 : <!header_two> from %arg0 : !p4corelib.packet_in
       p4hir.transition to @prs::@parse_bottom
     }
 // CHECK:    bmv2ir.state @parse_two
@@ -93,7 +90,7 @@ module {
 // CHECK:      bmv2ir.transition type  default next_state @prs::@parse_bottom
 // CHECK:    }
 // CHECK:     parser_ops {
-// CHECK:      bmv2ir.extract  regular "two"
+// CHECK:      bmv2ir.extract  regular @prs1_two
 // CHECK:    }
     p4hir.state @parse_bottom {
       p4hir.transition to @prs::@accept
