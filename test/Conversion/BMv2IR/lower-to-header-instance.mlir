@@ -18,6 +18,8 @@ module {
     // CHECK:    %[[TWO:.*]] = bmv2ir.header_instance @prs1_one : !p4hir.ref<!header_one> -> !p4hir.ref<!header_one>
     // CHECK:    %[[THREE:.*]] = bmv2ir.header_instance @prs1_two : !p4hir.ref<!header_two> -> !p4hir.ref<!header_two>
 
+    %e_0 = p4hir.variable ["e_0"] annotations {name = "ParserImpl.e"} : <!header_one>
+    // CHECK: %[[E_0:.*]] = bmv2ir.header_instance @prs_e_0 : !p4hir.ref<!header_one> -> !p4hir.ref<!header_one>
     p4hir.state @start {
       %top_field_ref = p4hir.struct_field_ref %arg1["top"] : <!Headers_t>
       p4corelib.extract_header %top_field_ref : <!header_top> from %arg0 : !p4corelib.packet_in
@@ -52,14 +54,16 @@ module {
     }
     p4hir.state @parse_one {
       %one_field_ref = p4hir.struct_field_ref %arg1["one"] : <!Headers_t>
-      p4corelib.extract_header %one_field_ref : <!header_one> from %arg0 : !p4corelib.packet_in
-    // CHECK: p4corelib.extract_header %[[TWO]] : <!header_one> from %arg0 : !p4corelib.packet_in
+      p4corelib.extract_header %e_0 : <!header_one> from %arg0 : !p4corelib.packet_in
+    // CHECK: p4corelib.extract_header %[[E_0]] : <!header_one> from %arg0 : !p4corelib.packet_in
+      %val = p4hir.read %e_0 : <!header_one>
+      p4hir.assign %val, %one_field_ref : <!header_one>
       p4hir.transition to @prs::@parse_two
     }
     p4hir.state @parse_two {
       %two_field_ref = p4hir.struct_field_ref %arg1["two"] : <!Headers_t>
-    // CHECK:  p4corelib.extract_header %[[THREE]] : <!header_two> from %arg0 : !p4corelib.packet_in
       p4corelib.extract_header %two_field_ref : <!header_two> from %arg0 : !p4corelib.packet_in
+    // CHECK:  p4corelib.extract_header %[[THREE]] : <!header_two> from %arg0 : !p4corelib.packet_in
       p4hir.transition to @prs::@parse_bottom
     }
     p4hir.state @parse_bottom {

@@ -46,7 +46,7 @@ bool isStructWithHeaders(mlir::Type ty) {
     assert(
         llvm::none_of(structTy.getFields(),
                       [](P4HIR::FieldInfo field) { return isa<P4HIR::StructType>(field.type); }) &&
-        "No structs inside structs");
+        "No structs within structs");
     auto res = llvm::any_of(structTy.getFields(), [](P4HIR::FieldInfo field) {
         return isa<P4HIR::HeaderType>(field.type);
     });
@@ -68,6 +68,8 @@ LogicalResult splitStructAndAddInstances(Value val, Location loc, StringRef pare
     llvm::StringMap<BMv2IR::HeaderInstanceOp> instances;
     SmallPtrSet<Operation *, 5> fieldRefs;
 
+    // Find the StructFieldRefOp that access the struct, add a header instance for every field
+    // accessed
     for (auto user : val.getUsers()) {
         if (auto fieldRefOp = dyn_cast<P4HIR::StructFieldRefOp>(user)) {
             if (isa<P4HIR::HeaderType>(structTy.getFieldType(fieldRefOp.getFieldName())))
@@ -91,6 +93,16 @@ LogicalResult splitStructAndAddInstances(Value val, Location loc, StringRef pare
         }
         rewriter.replaceOp(fieldRefOp, instanceOp);
     }
+    return success();
+}
+
+LogicalResult addInstanceForHeader(Operation *op, P4HIR::HeaderType headerTy, Twine name,
+                                   PatternRewriter &rewriter) {
+    PatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointAfter(op);
+    rewriter.replaceOpWithNewOp<BMv2IR::HeaderInstanceOp>(op, rewriter.getStringAttr(name),
+                                                          P4HIR::ReferenceType::get(headerTy));
+
     return success();
 }
 
@@ -118,6 +130,42 @@ struct ParserOpPattern : public OpRewritePattern<P4HIR::ParserOp> {
     }
 };
 
+struct VariableOpPattern : public OpRewritePattern<P4HIR::VariableOp> {
+    using OpRewritePattern<P4HIR::VariableOp>::OpRewritePattern;
+
+    mlir::LogicalResult matchAndRewrite(P4HIR::VariableOp variableOp,
+                                        mlir::PatternRewriter &rewriter) const override {
+        auto refTy = variableOp.getType();
+        auto ty = refTy.getObjectType();
+        auto maybeName = variableOp.getName();
+        if (!maybeName.has_value())
+            return variableOp.emitError("Unnamed variable can't be lowered to header instance");
+        auto name = maybeName.value();
+        // FIXME: Add support for other parents, alternatively we could remove IsolatedFromAbove
+        // from Parsers and always add header instances to ModuleOp's main block
+        auto parserParent = variableOp->getParentOfType<P4HIR::ParserOp>();
+        if (!parserParent) return variableOp.emitError("Unexpected VariableOp parent");
+
+        auto res = TypeSwitch<Type, LogicalResult>(ty)
+                       .Case([&](P4HIR::StructType) -> LogicalResult {
+                           if (failed(splitStructAndAddInstances(
+                                   variableOp.getResult(), variableOp.getLoc(), name,
+                                   parserParent.getBody().front(), rewriter)))
+                               return variableOp.emitError("Error translating variableOp");
+                           return success();
+                       })
+                       .Case([&](P4HIR::HeaderType headerTy) -> LogicalResult {
+                           if (failed(addInstanceForHeader(variableOp, headerTy,
+                                                           parserParent.getSymName() + "_" + name,
+                                                           rewriter)))
+                               return variableOp.emitError("Error translating variableOp");
+                           return success();
+                       })
+                       .Default([](Type ty) { return failure(); });
+        return res;
+    }
+};
+
 struct LowerToHeaderInstancePass
     : public P4::P4MLIR::impl::LowerToHeaderInstanceBase<LowerToHeaderInstancePass> {
     void runOnOperation() override {
@@ -132,9 +180,14 @@ struct LowerToHeaderInstancePass
                 return isa<P4HIR::HeaderType>(ty) || isStructWithHeaders(ty);
             });
         });
+        target.addDynamicallyLegalOp<P4HIR::VariableOp>([](P4HIR::VariableOp varOp) {
+            auto refTy = varOp.getType();
+            auto ty = refTy.getObjectType();
+            return !isa<P4HIR::HeaderType>(ty) && !isStructWithHeaders(ty);
+        });
 
-        // TODO: add support for local variables and controls
-        patterns.add<ParserOpPattern>(patterns.getContext());
+        // TODO: add support for controls and other ops that may lead header instances
+        patterns.add<ParserOpPattern, VariableOpPattern>(patterns.getContext());
 
         if (failed(applyPartialConversion(getOperation(), target, std::move(patterns))))
             signalPassFailure();
