@@ -58,6 +58,7 @@ module {
     // CHECK: p4corelib.extract_header %[[E_0]] : <!header_one> from %arg0 : !p4corelib.packet_in
       %val = p4hir.read %e_0 : <!header_one>
       p4hir.assign %val, %one_field_ref : <!header_one>
+    // CHECK: p4hir.assign %{{.*}}, %[[TWO]] : <!header_one>
       p4hir.transition to @prs::@parse_two
     }
     p4hir.state @parse_two {

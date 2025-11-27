@@ -14,8 +14,13 @@ module {
   p4hir.parser @prs(%arg0: !p4corelib.packet_in {p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "p"}, %arg1: !p4hir.ref<!Headers_t> {p4hir.dir = #p4hir<dir out>, p4hir.param_name = "headers"})() {
 // CHECK:  bmv2ir.parser @prs init_state @prs::@start {
     %0 = bmv2ir.header_instance @prs1_top : !p4hir.ref<!header_top> -> !p4hir.ref<!header_top>
+// CHECK:    bmv2ir.header_instance @prs1_top : !bmv2ir.header<"header_top", [skip:!p4hir.bit<8>], max_length = 1>
     %1 = bmv2ir.header_instance @prs1_one : !p4hir.ref<!header_one> -> !p4hir.ref<!header_one>
+// CHECK:    bmv2ir.header_instance @prs1_one : !bmv2ir.header<"header_one", [type:!p4hir.bit<8>, data:!p4hir.bit<8>], max_length = 2>
     %2 = bmv2ir.header_instance @prs1_two : !p4hir.ref<!header_two> -> !p4hir.ref<!header_two>
+// CHECK:    bmv2ir.header_instance @prs1_two : !bmv2ir.header<"header_two", [type:!p4hir.bit<8>, data:!p4hir.bit<16>], max_length = 3>
+    %e_0 = bmv2ir.header_instance @prs_e_0 : !p4hir.ref<!header_one> -> !p4hir.ref<!header_one>
+// CHECK:    bmv2ir.header_instance @prs_e_0 : !bmv2ir.header<"header_one", [type:!p4hir.bit<8>, data:!p4hir.bit<8>], max_length = 2>
     p4hir.state @start {
       p4corelib.extract_header %0 : <!header_top> from %arg0 : !p4corelib.packet_in
       p4hir.transition to @prs::@parse_headers
@@ -67,7 +72,9 @@ module {
 // CHECK:     parser_ops {
 // CHECK:    }
     p4hir.state @parse_one {
-      p4corelib.extract_header %1 : <!header_one> from %arg0 : !p4corelib.packet_in
+      p4corelib.extract_header %e_0 : <!header_one> from %arg0 : !p4corelib.packet_in
+      %val = p4hir.read %e_0 : <!header_one>
+      p4hir.assign %val, %1 : <!header_one>
       p4hir.transition to @prs::@parse_two
     }
 // CHECK:    bmv2ir.state @parse_one
@@ -77,7 +84,8 @@ module {
 // CHECK:      bmv2ir.transition type  default next_state @prs::@parse_two
 // CHECK:    }
 // CHECK:     parser_ops {
-// CHECK:      bmv2ir.extract  regular @prs1_one
+// CHECK:      bmv2ir.extract  regular @prs_e_0
+// CHECK:      bmv2ir.assign_header @prs_e_0 to @prs1_one
 // CHECK:    }
     p4hir.state @parse_two {
       p4corelib.extract_header %2 : <!header_two> from %arg0 : !p4corelib.packet_in

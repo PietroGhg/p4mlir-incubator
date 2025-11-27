@@ -186,7 +186,7 @@ struct LowerToHeaderInstancePass
             return !isa<P4HIR::HeaderType>(ty) && !isStructWithHeaders(ty);
         });
 
-        // TODO: add support for controls and other ops that may lead header instances
+        // TODO: add support for controls and other ops that may lead to header instances
         patterns.add<ParserOpPattern, VariableOpPattern>(patterns.getContext());
 
         if (failed(applyPartialConversion(getOperation(), target, std::move(patterns))))

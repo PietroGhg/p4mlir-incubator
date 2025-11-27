@@ -169,6 +169,23 @@ def BMv2_ExtractOp : BMv2IR_Op<"extract", [HasParent<"ParserStateOp">, AllowedPa
   }];
 }
 
+def BMv2_AssignHeaderOp : BMv2IR_Op<"assign_header", [AllowedParserOp]> {
+  let summary = "Assign header operation";
+  let description = [{
+    Assigns one header instance to another.
+  }];
+
+  
+  let arguments = (ins
+    SymbolRefAttr:$src,
+    SymbolRefAttr:$dst
+  );
+  
+  let assemblyFormat = [{
+    $src `to` $dst attr-dict
+  }];
+}
+
 //===-------------------------------------------------------------------------------------------===//
 // BMv2 type-value fields
 // see https://github.com/p4lang/behavioral-model/blob/main/docs/JSON_format.md#the-type-value-object
