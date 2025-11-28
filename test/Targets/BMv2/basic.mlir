@@ -2,80 +2,6 @@
 !b8i = !p4hir.bit<8>
 #int1_b8i = #p4hir.int<1> : !b8i
 #int2_b8i = #p4hir.int<2> : !b8i
-
-// CHECK:{
-// CHECK:  "header_types": [
-// CHECK:    {
-// CHECK:      "fields": [
-// CHECK:        [
-// CHECK:          "skip",
-// CHECK:          8,
-// CHECK:          false
-// CHECK:        ]
-// CHECK:      ],
-// CHECK:      "id": 0,
-// CHECK:      "name": "header_top"
-// CHECK:    },
-// CHECK:    {
-// CHECK:      "fields": [
-// CHECK:        [
-// CHECK:          "type",
-// CHECK:          8,
-// CHECK:          false
-// CHECK:        ],
-// CHECK:        [
-// CHECK:          "data",
-// CHECK:          8,
-// CHECK:          false
-// CHECK:        ]
-// CHECK:      ],
-// CHECK:      "id": 1,
-// CHECK:      "name": "header_one"
-// CHECK:    },
-// CHECK:    {
-// CHECK:      "fields": [
-// CHECK:        [
-// CHECK:          "type",
-// CHECK:          8,
-// CHECK:          false
-// CHECK:        ],
-// CHECK:        [
-// CHECK:          "data",
-// CHECK:          16,
-// CHECK:          false
-// CHECK:        ]
-// CHECK:      ],
-// CHECK:      "id": 2,
-// CHECK:      "name": "header_two"
-// CHECK:    }
-// CHECK:  ],
-// CHECK:      "headers": [
-// CHECK:    {
-// CHECK:      "header_types": "header_top",
-// CHECK:      "id": 0,
-// CHECK:      "metadata": false,
-// CHECK:      "name": "prs1_top"
-// CHECK:    },
-// CHECK:    {
-// CHECK:      "header_types": "header_one",
-// CHECK:      "id": 1,
-// CHECK:      "metadata": false,
-// CHECK:      "name": "prs1_one"
-// CHECK:    },
-// CHECK:    {
-// CHECK:      "header_types": "header_two",
-// CHECK:      "id": 2,
-// CHECK:      "metadata": false,
-// CHECK:      "name": "prs1_two"
-// CHECK:    },
-// CHECK:    {
-// CHECK:      "header_types": "header_one",
-// CHECK:      "id": 3,
-// CHECK:      "metadata": false,
-// CHECK:      "name": "prs_e_0"
-// CHECK:    }
-// CHECK:  ]
-// CHECK:}
 module {
   bmv2ir.parser @prs init_state @prs::@start {
     %0 = bmv2ir.header_instance @prs1_top : !bmv2ir.header<"header_top", [skip:!p4hir.bit<8>], max_length = 1> -> !bmv2ir.header<"header_top", [skip:!p4hir.bit<8>], max_length = 1>
@@ -141,3 +67,232 @@ module {
   }
 }
 
+
+// CHECK:{
+// CHECK:  "header_types": [
+// CHECK:    {
+// CHECK:      "fields": [
+// CHECK:        [
+// CHECK:          "skip",
+// CHECK:          8,
+// CHECK:          false
+// CHECK:        ]
+// CHECK:      ],
+// CHECK:      "id": 0,
+// CHECK:      "name": "header_top"
+// CHECK:    },
+// CHECK:    {
+// CHECK:      "fields": [
+// CHECK:        [
+// CHECK:          "type",
+// CHECK:          8,
+// CHECK:          false
+// CHECK:        ],
+// CHECK:        [
+// CHECK:          "data",
+// CHECK:          8,
+// CHECK:          false
+// CHECK:        ]
+// CHECK:      ],
+// CHECK:      "id": 1,
+// CHECK:      "name": "header_one"
+// CHECK:    },
+// CHECK:    {
+// CHECK:      "fields": [
+// CHECK:        [
+// CHECK:          "type",
+// CHECK:          8,
+// CHECK:          false
+// CHECK:        ],
+// CHECK:        [
+// CHECK:          "data",
+// CHECK:          16,
+// CHECK:          false
+// CHECK:        ]
+// CHECK:      ],
+// CHECK:      "id": 2,
+// CHECK:      "name": "header_two"
+// CHECK:    }
+// CHECK:  ],
+// CHECK:  "headers": [
+// CHECK:    {
+// CHECK:      "header_type": "header_top",
+// CHECK:      "id": 0,
+// CHECK:      "metadata": false,
+// CHECK:      "name": "prs1_top"
+// CHECK:    },
+// CHECK:    {
+// CHECK:      "header_type": "header_one",
+// CHECK:      "id": 1,
+// CHECK:      "metadata": false,
+// CHECK:      "name": "prs1_one"
+// CHECK:    },
+// CHECK:    {
+// CHECK:      "header_type": "header_two",
+// CHECK:      "id": 2,
+// CHECK:      "metadata": false,
+// CHECK:      "name": "prs1_two"
+// CHECK:    },
+// CHECK:    {
+// CHECK:      "header_type": "header_one",
+// CHECK:      "id": 3,
+// CHECK:      "metadata": false,
+// CHECK:      "name": "prs_e_0"
+// CHECK:    }
+// CHECK:  ],
+// CHECK:  "parsers": [
+// CHECK:    {
+// CHECK:      "init_state": "start",
+// CHECK:      "name": "prs",
+// CHECK:      "parse_states": [
+// CHECK:        {
+// CHECK:          "name": "start",
+// CHECK:          "parser_ops": [
+// CHECK:            {
+// CHECK:              "op": "extract",
+// CHECK:              "parameters": [
+// CHECK:                {
+// CHECK:                  "type": "regular",
+// CHECK:                  "value": "e_0"
+// CHECK:                }
+// CHECK:              ]
+// CHECK:            }
+// CHECK:          ],
+// CHECK:          "transition_key": [],
+// CHECK:          "transitions": [
+// CHECK:            {
+// CHECK:              "mask": null,
+// CHECK:              "next_state": "parse_headers",
+// CHECK:              "type": "default",
+// CHECK:              "value": null
+// CHECK:            }
+// CHECK:          ]
+// CHECK:        },
+// CHECK:        {
+// CHECK:          "name": "parse_headers",
+// CHECK:          "parser_ops": [],
+// CHECK:          "transition_key": [
+// CHECK:            {
+// CHECK:              "type": "lookahead",
+// CHECK:              "value": [
+// CHECK:                0,
+// CHECK:                8
+// CHECK:              ]
+// CHECK:            }
+// CHECK:          ],
+// CHECK:          "transitions": [
+// CHECK:            {
+// CHECK:              "mask": null,
+// CHECK:              "next_state": "parse_one",
+// CHECK:              "type": "hexstr",
+// CHECK:              "value": "1"
+// CHECK:            },
+// CHECK:            {
+// CHECK:              "mask": null,
+// CHECK:              "next_state": "parse_two",
+// CHECK:              "type": "hexstr",
+// CHECK:              "value": "2"
+// CHECK:            },
+// CHECK:            {
+// CHECK:              "mask": "2",
+// CHECK:              "next_state": "parse_two",
+// CHECK:              "type": "hexstr",
+// CHECK:              "value": "1"
+// CHECK:            },
+// CHECK:            {
+// CHECK:              "mask": null,
+// CHECK:              "next_state": "parse_bottom",
+// CHECK:              "type": "default",
+// CHECK:              "value": null
+// CHECK:            }
+// CHECK:          ]
+// CHECK:        },
+// CHECK:        {
+// CHECK:          "name": "parse_one",
+// CHECK:          "parser_ops": [
+// CHECK:            {
+// CHECK:              "op": "extract",
+// CHECK:              "parameters": [
+// CHECK:                {
+// CHECK:                  "type": "regular",
+// CHECK:                  "value": "e_0"
+// CHECK:                }
+// CHECK:              ]
+// CHECK:            },
+// CHECK:            {
+// CHECK:              "op": "assign_header",
+// CHECK:              "parameters": [
+// CHECK:                {
+// CHECK:                  "type": "header",
+// CHECK:                  "value": "prs1_one"
+// CHECK:                },
+// CHECK:                {
+// CHECK:                  "type": "header",
+// CHECK:                  "value": "prs_e_0"
+// CHECK:                }
+// CHECK:              ]
+// CHECK:            }
+// CHECK:          ],
+// CHECK:          "transition_key": [],
+// CHECK:          "transitions": [
+// CHECK:            {
+// CHECK:              "mask": null,
+// CHECK:              "next_state": "parse_two",
+// CHECK:              "type": "default",
+// CHECK:              "value": null
+// CHECK:            }
+// CHECK:          ]
+// CHECK:        },
+// CHECK:        {
+// CHECK:          "name": "parse_two",
+// CHECK:          "parser_ops": [
+// CHECK:            {
+// CHECK:              "op": "extract",
+// CHECK:              "parameters": [
+// CHECK:                {
+// CHECK:                  "type": "regular",
+// CHECK:                  "value": "e_0"
+// CHECK:                }
+// CHECK:              ]
+// CHECK:            }
+// CHECK:          ],
+// CHECK:          "transition_key": [],
+// CHECK:          "transitions": [
+// CHECK:            {
+// CHECK:              "mask": null,
+// CHECK:              "next_state": "parse_bottom",
+// CHECK:              "type": "default",
+// CHECK:              "value": null
+// CHECK:            }
+// CHECK:          ]
+// CHECK:        },
+// CHECK:        {
+// CHECK:          "name": "parse_bottom",
+// CHECK:          "parser_ops": [],
+// CHECK:          "transition_key": [],
+// CHECK:          "transitions": [
+// CHECK:            {
+// CHECK:              "mask": null,
+// CHECK:              "next_state": "accept",
+// CHECK:              "type": "default",
+// CHECK:              "value": null
+// CHECK:            }
+// CHECK:          ]
+// CHECK:        },
+// CHECK:        {
+// CHECK:          "name": "accept",
+// CHECK:          "parser_ops": [],
+// CHECK:          "transition_key": [],
+// CHECK:          "transitions": [
+// CHECK:            {
+// CHECK:              "mask": null,
+// CHECK:              "next_state": null,
+// CHECK:              "type": "default",
+// CHECK:              "value": null
+// CHECK:            }
+// CHECK:          ]
+// CHECK:        }
+// CHECK:      ]
+// CHECK:    }
+// CHECK:  ]
+// CHECK:}

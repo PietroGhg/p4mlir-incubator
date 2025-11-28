@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
@@ -21,18 +22,6 @@ using namespace llvm;
 using namespace mlir;
 using namespace P4::P4MLIR;
 
-static constexpr char const *header_types_str = "header_types";
-static constexpr char const *header_type_str = "header_types";
-static constexpr char const *headers_str = "headers";
-static constexpr char const *max_len_str = "max_length";
-static constexpr char const *name_str = "name";
-static constexpr char const *fields_str = "fields";
-static constexpr char const *metadata_str = "metadata";
-static constexpr char const *id_str = "id";
-static constexpr char const *type_str = "type";
-static constexpr char const *value_str = "value";
-static constexpr char const *mask_str = "mask";
-static constexpr char const *next_state_str = "next_state";
 
 // Opaquely adds an `id` field to all the elements of a json Array
 static void addUniqueID(json::Array &arr) {
@@ -40,7 +29,7 @@ static void addUniqueID(json::Array &arr) {
     for (auto &node : arr) {
         auto obj = node.getAsObject();
         assert(obj && "Expected JSON object");
-        obj->insert({.K = id_str, .V = id});
+        obj->insert({.K = "id", .V = id});
         id++;
     }
 }
@@ -64,10 +53,9 @@ static json::Object toJSON(BMv2IR::HeaderType headerTy) {
         fields.push_back(std::move(fieldDesc));
     }
 
-    res.insert({.K = fields_str, .V = std::move(fields)});
-    res.insert({.K = name_str, .V = headerTy.getName()});
-    if (hasVarLenField)
-      res.insert({.K = max_len_str, .V = headerTy.getMaxLength()});
+    res["fields"] = std::move(fields);
+    res["name"] = headerTy.getName();
+    if (hasVarLenField) res["max_length"] = headerTy.getMaxLength();
 
     return res;
 }
@@ -75,9 +63,9 @@ static json::Object toJSON(BMv2IR::HeaderType headerTy) {
 static json::Object toJSON(BMv2IR::HeaderInstanceOp headerInstance) {
     json::Object res;
     auto name = cast<BMv2IR::HeaderType>(headerInstance.getType()).getName();
-    res.insert({.K = name_str, .V = headerInstance.getSymName().str()});
-    res.insert({.K = header_type_str, .V = name.str()});
-    res.insert({.K = metadata_str, .V = headerInstance.getMetadata()});
+    res["name"] = headerInstance.getSymName().str();
+    res["header_type"] = name.str();
+    res["metadata"] = headerInstance.getMetadata();
 
     return res;
 }
@@ -86,32 +74,33 @@ static json::Object toJSON(BMv2IR::TransitionOp transitionOp) {
     json::Object res;
     auto type = transitionOp.getType();
     auto typeStr = BMv2IR::stringifyTransitionKind(type);
-    res.insert({.K = type_str, .V = typeStr});
+    res["type"] = typeStr;
     auto maybeNextState = transitionOp.getNextState();
-    if (maybeNextState.has_value())
-      res.insert({.K = next_state_str, .V = maybeNextState->getLeafReference().str()});
-    else
-      res.insert({.K = next_state_str, .V = json::Value(nullptr)});
+    if (maybeNextState.has_value()) {
+        auto nextStateName = maybeNextState.value().getLeafReference().getValue();
+        res["next_state"] = nextStateName;
+    } else
+        res["next_state"] = json::Value(nullptr);
 
     switch (type) {
         case BMv2IR::TransitionKind::Hexstr: {
             auto valueAttr = cast<P4HIR::IntAttr>(transitionOp.getValueAttr());
             // FIXME: print value as hexadecimal
             auto value = std::to_string(valueAttr.getValue().getSExtValue());
-            res.insert({.K = value_str, .V = value});
+            res["value"] = value;
             auto mask = transitionOp.getMask();
             if (mask.has_value()) {
               auto maskAttr = cast<P4HIR::IntAttr>(mask.value());
               auto mask = std::to_string(maskAttr.getValue().getSExtValue());
-              res.insert({.K = mask_str, .V = mask});
+              res["mask"] = mask;
             } else {
-              res.insert({.K = mask_str, .V = json::Value(nullptr)});
+                res["mask"] = json::Value(nullptr);
             }
             break;
         }
         case BMv2IR::TransitionKind::Default: {
-            res.insert({.K = value_str, .V = json::Value(nullptr)});
-            res.insert({.K = mask_str, .V = json::Value(nullptr)});
+            res["value"] = json::Value(nullptr);
+            res["mask"] = json::Value(nullptr);
             break;
         }
         case BMv2IR::TransitionKind::Parse_vset: {
@@ -121,9 +110,101 @@ static json::Object toJSON(BMv2IR::TransitionOp transitionOp) {
     return res;
 }
 
+static json::Object toJSON(BMv2IR::LookaheadOp lookAheadOp) {
+    json::Object res;
+    res["type"] = "lookahead";
+    json::Array val{lookAheadOp.getBitOffset(), lookAheadOp.getBitwidth()};
+    res["value"] = std::move(val);
+    return res;
+}
+
+static json::Object toJSON(BMv2IR::AllowedTransitionKey trKey) {
+    // TODO: add other cases
+    return llvm::TypeSwitch<Operation *, json::Object>(trKey.getOperation())
+        .Case([](BMv2IR::LookaheadOp lookAheadOp) { return toJSON(lookAheadOp); })
+        .Default([](Operation *) -> json::Object { llvm_unreachable("Unsupported op"); });
+}
+
+static json::Object toJSON(BMv2IR::AssignHeaderOp assignOp) {
+    // TODO: wrap this in a primitive node
+    json::Object res;
+    res["op"] = "assign_header";
+    json::Object srcNode;
+    srcNode["type"] = "header";
+    srcNode["value"] = assignOp.getSrc().getLeafReference().getValue();
+    json::Object dstNode;
+    dstNode["type"] = "header";
+    dstNode["value"] = assignOp.getDst().getLeafReference().getValue();
+
+    json::Array parameters;
+    parameters.push_back(std::move(dstNode));
+    parameters.push_back(std::move(srcNode));
+    res["parameters"] = std::move(parameters);
+    return res;
+}
+
+static json::Object toJSON(BMv2IR::ExtractOp extractOp) {
+    json::Object res;
+    res["op"] = "extract";
+    // TODO: add support for non-regular extracts
+    json::Array parameters;
+    auto type = extractOp.getExtractType();
+    if (type == BMv2IR::ExtractKind::Regular) {
+        json::Object desc;
+        desc["type"] = "regular";
+        desc["value"] = "e_0";
+        parameters.push_back(std::move(desc));
+    } else {
+        llvm_unreachable("Non-regular extracts not yet supported");
+    }
+    res["parameters"] = std::move(parameters);
+    return res;
+}
+
+static json::Object toJSON(BMv2IR::AllowedParserOp parserOp) {
+    // TODO: add other cases
+    return llvm::TypeSwitch<Operation *, json::Object>(parserOp.getOperation())
+        .Case([](BMv2IR::AssignHeaderOp assignOp) { return toJSON(assignOp); })
+        .Case([](BMv2IR::ExtractOp extractOp) { return toJSON(extractOp); })
+        .Default([](Operation *) -> json::Object { llvm_unreachable("Unsupported op"); });
+}
+
+static json::Object toJSON(BMv2IR::ParserStateOp stateOp) {
+    json::Object res;
+    res["name"] = stateOp.getSymName();
+
+    json::Array transitions;
+    stateOp.walk([&transitions](BMv2IR::TransitionOp transitionOp) {
+        transitions.push_back(toJSON(transitionOp));
+    });
+    res["transitions"] = std::move(transitions);
+
+    json::Array keys;
+    stateOp.walk([&keys](BMv2IR::AllowedTransitionKey key) { keys.push_back(toJSON(key)); });
+    res["transition_key"] = std::move(keys);
+
+    json::Array ops;
+    stateOp.walk([&ops](BMv2IR::AllowedParserOp op) { ops.push_back(toJSON(op)); });
+    res["parser_ops"] = std::move(ops);
+
+    return res;
+}
+
+static json::Object toJSON(BMv2IR::ParserOp parserOp) {
+    json::Object res;
+    res["name"] = parserOp.getSymName();
+    res["init_state"] = parserOp.getInitState().getLeafReference().getValue();
+
+    json::Array states;
+    parserOp.walk([&states](BMv2IR::ParserStateOp stateOp) { states.push_back(toJSON(stateOp)); });
+
+    res["parse_states"] = std::move(states);
+
+    return res;
+}
+
 mlir::FailureOr<json::Value> P4::P4MLIR::bmv2irToJson(ModuleOp moduleOp) {
     json::Object root;
-    json::ObjectKey headersNode(headers_str);
 
     // Emit header types and header instances
     SmallVector<BMv2IR::HeaderInstanceOp> headerInstances;
@@ -140,8 +221,13 @@ mlir::FailureOr<json::Value> P4::P4MLIR::bmv2irToJson(ModuleOp moduleOp) {
     }
     addUniqueID(headerTyNodes);
     addUniqueID(headerInstanceNodes);
-    root.insert({.K = header_types_str, .V = std::move(headerTyNodes)});
-    root.insert({.K = headers_str, .V = std::move(headerInstanceNodes)});
+    root["header_types"] = std::move(headerTyNodes);
+    root["headers"] = std::move(headerInstanceNodes);
+
+    // Emit parsers
+    json::Array parsers;
+    moduleOp.walk([&parsers](BMv2IR::ParserOp parserOp) { parsers.push_back(toJSON(parserOp)); });
+    root["parsers"] = std::move(parsers);
 
     json::Value res(std::move(root));
 
