@@ -1,5 +1,3 @@
-#include <string>
-
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -10,6 +8,7 @@
 #include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
@@ -37,9 +36,9 @@ using namespace P4::P4MLIR;
 
 namespace {
 
-P4HIR::StructType isStructWithHeaders(mlir::Type ty) {
+P4HIR::StructType isStructOrRefToStruct(mlir::Type ty) {
     if (auto refTy = dyn_cast<P4HIR::ReferenceType>(ty))
-        return isStructWithHeaders(refTy.getObjectType());
+        return isStructOrRefToStruct(refTy.getObjectType());
     auto structTy = dyn_cast<P4HIR::StructType>(ty);
     if (!structTy) return nullptr;
     // We avoid checking recursively here, it should be handled somewhere else
@@ -47,11 +46,7 @@ P4HIR::StructType isStructWithHeaders(mlir::Type ty) {
         llvm::none_of(structTy.getFields(),
                       [](P4HIR::FieldInfo field) { return isa<P4HIR::StructType>(field.type); }) &&
         "No structs within structs");
-    if (llvm::any_of(structTy.getFields(),
-                     [](P4HIR::FieldInfo field) { return isa<P4HIR::HeaderType>(field.type); })) {
-        return structTy;
-    }
-    return nullptr;
+    return structTy;
 }
 
 P4HIR::HeaderType isHeaderOrRefToHeader(mlir::Type ty) {
@@ -61,23 +56,33 @@ P4HIR::HeaderType isHeaderOrRefToHeader(mlir::Type ty) {
     return nullptr;
 }
 
+// Adds instances from a StructType, splitting the struct to create separate instances for
+// the header fields, and creating a new struct containing only the bit fields if necessary
 LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, Location loc,
                                          StringRef parentName, Block &insertPoint,
                                          PatternRewriter &rewriter) {
     llvm::StringMap<BMv2IR::HeaderInstanceOp> instances;
     SmallPtrSet<Operation *, 5> fieldRefs;
+    SmallPtrSet<Operation *, 5> bitRefs;
 
-    // Find the StructFieldRefOp that access the struct, add a header instance for every field
-    // accessed
+    // Find the StructFieldRefOp that access the struct
     for (auto user : val.getUsers()) {
         if (auto fieldRefOp = dyn_cast<P4HIR::StructFieldRefOp>(user)) {
-            if (isa<P4HIR::HeaderType>(structTy.getFieldType(fieldRefOp.getFieldName())))
+            auto fieldTy = structTy.getFieldType(fieldRefOp.getFieldName());
+            if (isa<P4HIR::HeaderType>(fieldTy))
                 fieldRefs.insert(fieldRefOp);
+            else if (isa<P4HIR::BitsType, P4HIR::VarBitsType>(fieldTy))
+                bitRefs.insert(fieldRefOp);
+            else
+                return emitError(loc, "Unsupported FieldRefOp");
+        } else {
+            return emitError(loc, "Unsupported struct use");
         }
     }
 
+    // Add HeaderInstanceOps for StructFieldRefOps that reference header fields
     for (auto op : fieldRefs) {
-        auto fieldRefOp = dyn_cast<P4HIR::StructFieldRefOp>(op);
+        auto fieldRefOp = cast<P4HIR::StructFieldRefOp>(op);
         auto name = fieldRefOp.getFieldName();
         auto instance = instances.find(name);
         BMv2IR::HeaderInstanceOp instanceOp = nullptr;
@@ -92,6 +97,30 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
         }
         rewriter.replaceOp(fieldRefOp, instanceOp);
     }
+
+    if (bitRefs.empty()) return success();
+
+    // Since the struct has bit fields, we create a new type dropping the header fields, and add a
+    // header instance for it
+
+    SmallVector<P4HIR::FieldInfo> bitFields;
+    for (auto field : structTy.getFields()) {
+        if (isa<P4HIR::BitsType, P4HIR::VarBitsType>(field.type)) bitFields.push_back(field);
+    }
+
+    PatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(&insertPoint);
+    auto newTy = P4HIR::StructType::get(rewriter.getContext(), structTy.getName(), bitFields,
+                                        structTy.getAnnotations());
+    auto newInstance = rewriter.create<BMv2IR::HeaderInstanceOp>(
+        loc, rewriter.getStringAttr(parentName), P4HIR::ReferenceType::get(newTy));
+    for (auto op : bitRefs) {
+        auto fieldRefOp = cast<P4HIR::StructFieldRefOp>(op);
+        rewriter.setInsertionPointAfter(fieldRefOp);
+        rewriter.replaceOpWithNewOp<P4HIR::StructFieldRefOp>(fieldRefOp, newInstance.getResult(),
+                                                             fieldRefOp.getFieldName());
+    }
+
     return success();
 }
 
@@ -129,12 +158,13 @@ struct ParserOpPattern : public OpRewritePattern<P4HIR::ParserOp> {
             if (auto headerTy = isHeaderOrRefToHeader(ty)) {
                 if (failed(addInstanceForHeader(arg, headerTy, parentName, rewriter)))
                     return parserOp->emitError("Failed to process parserOp");
-            } else if (auto structTy = isStructWithHeaders(ty)) {
+            } else if (auto structTy = isStructOrRefToStruct(ty)) {
                 if (failed(splitStructAndAddInstances(arg, structTy, parserOp.getLoc(), parentName,
                                                       parserOp.getBody().front(), rewriter)))
                     return parserOp->emitError("Failed to process parserOp");
             }
         }
+
         return mlir::success();
     }
 };
@@ -187,13 +217,13 @@ struct LowerToHeaderInstancePass
         target.addDynamicallyLegalOp<P4HIR::ParserOp>([](P4HIR::ParserOp parserOp) {
             auto argsTy = parserOp.getArgumentTypes();
             return !llvm::any_of(argsTy, [](mlir::Type ty) {
-                return isHeaderOrRefToHeader(ty) || isStructWithHeaders(ty);
+                return isHeaderOrRefToHeader(ty) || isStructOrRefToStruct(ty);
             });
         });
         target.addDynamicallyLegalOp<P4HIR::VariableOp>([](P4HIR::VariableOp varOp) {
             auto refTy = varOp.getType();
             auto ty = refTy.getObjectType();
-            return !isa<P4HIR::HeaderType>(ty) && !isStructWithHeaders(ty);
+            return !isa<P4HIR::HeaderType>(ty) && !isStructOrRefToStruct(ty);
         });
 
         // TODO: add support for controls and other ops that may lead to header instances

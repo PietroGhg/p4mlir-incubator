@@ -1,4 +1,4 @@
-// RUN: p4mlir-opt -p='builtin.module(lower-to-header-instance)' %s | FileCheck %s
+// RUN: p4mlir-opt -p='builtin.module(lower-to-header-instance)' --split-input-file %s | FileCheck %s
 !b16i = !p4hir.bit<16>
 !b32i = !p4hir.bit<32>
 !b8i = !p4hir.bit<8>
@@ -12,6 +12,7 @@
 #int256_b32i = #p4hir.int<256> : !b32i
 #int2_b8i = #p4hir.int<2> : !b8i
 !Headers_t = !p4hir.struct<"Headers_t", top: !header_top, one: !header_one, two: !header_two, bottom: !header_bottom>
+!header_and_bit = !p4hir.struct<"header_and_bit", top: !header_top, bit: !b8i>
 module {
   p4hir.parser @prs(%arg0: !p4corelib.packet_in {p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "p"}, %arg1: !p4hir.ref<!Headers_t> {p4hir.dir = #p4hir<dir out>, p4hir.param_name = "headers"})() {
     // CHECK:    %[[ONE:.*]] = bmv2ir.header_instance @prs1_top : !p4hir.ref<!header_top> -> !p4hir.ref<!header_top>
@@ -81,11 +82,71 @@ module {
     p4hir.state @start {
       p4corelib.extract_header %arg1 : <!header_top> from %arg0 : !p4corelib.packet_in
 // CHECK: p4corelib.extract_header %[[TOP]] : <!header_top> from %arg0 : !p4corelib.packet_in
-      p4hir.transition to @prs::@accept
+      p4hir.transition to @prs_header_arg::@accept
     }
     p4hir.state @accept {
       p4hir.parser_accept
     }
-    p4hir.transition to @prs::@start
+    p4hir.transition to @prs_header_arg::@start
+  }
+}
+
+
+// -----
+
+// Checks that we correctly split a struct having both headers and bits
+!b8i = !p4hir.bit<8>
+!validity_bit = !p4hir.validity.bit
+!header_top = !p4hir.header<"header_top", skip: !b8i, __valid: !validity_bit>
+!header_and_bit = !p4hir.struct<"header_and_bit", top: !header_top, bit: !b8i>
+// CHECK: ![[SPLIT_STRUCT:.*]] = !p4hir.struct<"header_and_bit", bit: !b8i>
+module {
+    p4hir.parser @prs_header_and_bit(%arg0: !p4corelib.packet_in {p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "p"}, %arg1: !p4hir.ref<!header_and_bit> {p4hir.dir = #p4hir<dir out>, p4hir.param_name = "headers"})() {
+    %var = p4hir.variable ["top_0"] annotations {name = "ParserImpl.e"} : <!header_top>
+// CHECK: %[[ARG:.*]] = bmv2ir.header_instance @prs_header_and_bit1 : !p4hir.ref<![[SPLIT_STRUCT]]> -> !p4hir.ref<![[SPLIT_STRUCT]]>
+// CHECK: %[[LOCAL:.*]] = bmv2ir.header_instance @prs_header_and_bit_top_0 : !p4hir.ref<!header_top> -> !p4hir.ref<!header_top>
+    p4hir.state @start {
+      p4corelib.extract_header %var : <!header_top> from %arg0 : !p4corelib.packet_in
+      %bit = p4hir.struct_field_ref %var["skip"] : <!header_top>
+// CHECK:  %{{.*}} = p4hir.struct_field_ref %[[LOCAL]]["skip"]
+      %val = p4hir.read %bit : <!b8i>
+      %ref = p4hir.struct_field_ref %arg1["bit"] : <!header_and_bit>
+// CHECK:  %{{.*}} = p4hir.struct_field_ref %[[ARG]]["bit"]
+      p4hir.assign %val, %ref : <!b8i>
+      p4hir.transition to @prs_header_and_bit::@accept
+    }
+    p4hir.state @accept {
+      p4hir.parser_accept
+    }
+    p4hir.transition to @prs_header_and_bit::@start
+  }
+}
+
+// -----
+
+// Checks that we correctly insert header instances for structs with only bit fields
+!b8i = !p4hir.bit<8>
+!validity_bit = !p4hir.validity.bit
+!header_top = !p4hir.header<"header_top", skip: !b8i, __valid: !validity_bit>
+!bit_only = !p4hir.struct<"bit_only", bit: !b8i>
+module {
+    p4hir.parser @prs_only_bit(%arg0: !p4corelib.packet_in {p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "p"}, %arg1: !p4hir.ref<!bit_only> {p4hir.dir = #p4hir<dir out>, p4hir.param_name = "headers"}, %arg2: !p4hir.ref<!header_top> {p4hir.dir = #p4hir<dir out>, p4hir.param_name = "headers"})() {
+    %var = p4hir.variable ["top_0"] annotations {name = "ParserImpl.e"} : <!header_top>
+// CHECK: %{{.*}} = bmv2ir.header_instance @prs_only_bit1 : !p4hir.ref<!bit_only> -> !p4hir.ref<!bit_only>
+    p4hir.state @start {
+      p4corelib.extract_header %var : <!header_top> from %arg0 : !p4corelib.packet_in
+      %bit = p4hir.struct_field_ref %var["skip"] : <!header_top>
+      %val = p4hir.read %bit : <!b8i>
+      %ref = p4hir.struct_field_ref %arg1["bit"] : <!bit_only>
+      p4hir.assign %val, %ref : <!b8i>
+      %val2 = p4hir.read %ref : <!b8i>
+      %ref2 = p4hir.struct_field_ref %arg2["skip"] : <!header_top>
+      p4hir.assign %val2, %ref2 : <!b8i>
+      p4hir.transition to @prs_only_bit::@accept
+    }
+    p4hir.state @accept {
+      p4hir.parser_accept
+    }
+    p4hir.transition to @prs_only_bit::@start
   }
 }

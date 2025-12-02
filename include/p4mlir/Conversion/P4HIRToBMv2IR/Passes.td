@@ -32,6 +32,11 @@ def LowerToHeaderInstance : Pass<"lower-to-header-instance", "mlir::ModuleOp"> {
     local variables whose type is either a header or a struct containing headers, it adds
     header_instance ops for it and replaces uses of the header (or the struct's fields) with the
     global instance.
+    The pass only supports either:
+    * headers with only bit fields
+    * structs with only headers or bit fields
+    If a struct has both bit fields and headers, the pass will create a new struct with only the
+    bit fields (and a corresponding header instance), and separate instances for the header fields.
   }];
   let dependentDialects = [
       "::P4::P4MLIR::P4HIR::P4HIRDialect",
