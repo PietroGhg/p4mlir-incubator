@@ -75,4 +75,17 @@ module {
     }
     p4hir.transition to @prs::@start
   }
+
+  p4hir.parser @prs_header_arg(%arg0: !p4corelib.packet_in {p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "p"}, %arg1: !p4hir.ref<!header_top> {p4hir.dir = #p4hir<dir out>, p4hir.param_name = "headers"})() {
+// CHECK: %[[TOP:.*]] = bmv2ir.header_instance @prs_header_arg1 : !p4hir.ref<!header_top> -> !p4hir.ref<!header_top>
+    p4hir.state @start {
+      p4corelib.extract_header %arg1 : <!header_top> from %arg0 : !p4corelib.packet_in
+// CHECK: p4corelib.extract_header %[[TOP]] : <!header_top> from %arg0 : !p4corelib.packet_in
+      p4hir.transition to @prs::@accept
+    }
+    p4hir.state @accept {
+      p4hir.parser_accept
+    }
+    p4hir.transition to @prs::@start
+  }
 }

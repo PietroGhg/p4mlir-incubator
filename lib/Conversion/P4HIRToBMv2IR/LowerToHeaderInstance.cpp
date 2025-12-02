@@ -37,34 +37,33 @@ using namespace P4::P4MLIR;
 
 namespace {
 
-bool isStructWithHeaders(mlir::Type ty) {
+P4HIR::StructType isStructWithHeaders(mlir::Type ty) {
     if (auto refTy = dyn_cast<P4HIR::ReferenceType>(ty))
         return isStructWithHeaders(refTy.getObjectType());
     auto structTy = dyn_cast<P4HIR::StructType>(ty);
-    if (!structTy) return false;
+    if (!structTy) return nullptr;
     // We avoid checking recursively here, it should be handled somewhere else
     assert(
         llvm::none_of(structTy.getFields(),
                       [](P4HIR::FieldInfo field) { return isa<P4HIR::StructType>(field.type); }) &&
         "No structs within structs");
-    auto res = llvm::any_of(structTy.getFields(), [](P4HIR::FieldInfo field) {
-        return isa<P4HIR::HeaderType>(field.type);
-    });
-    return res;
+    if (llvm::any_of(structTy.getFields(),
+                     [](P4HIR::FieldInfo field) { return isa<P4HIR::HeaderType>(field.type); })) {
+        return structTy;
+    }
+    return nullptr;
 }
 
-LogicalResult splitStructAndAddInstances(Value val, Location loc, StringRef parentName,
-                                         Block &insertPoint, PatternRewriter &rewriter) {
-    auto ty = val.getType();
-    P4HIR::StructType structTy = nullptr;
-    if (auto refTy = dyn_cast<P4HIR::ReferenceType>(ty)) {
-        structTy = dyn_cast<P4HIR::StructType>(refTy.getObjectType());
-    } else {
-        structTy = dyn_cast<P4HIR::StructType>(ty);
-    }
+P4HIR::HeaderType isHeaderOrRefToHeader(mlir::Type ty) {
+    if (auto refTy = dyn_cast<P4HIR::ReferenceType>(ty))
+        return isHeaderOrRefToHeader(refTy.getObjectType());
+    if (auto headerTy = dyn_cast<P4HIR::HeaderType>(ty)) return headerTy;
+    return nullptr;
+}
 
-    if (!structTy) return failure();
-
+LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, Location loc,
+                                         StringRef parentName, Block &insertPoint,
+                                         PatternRewriter &rewriter) {
     llvm::StringMap<BMv2IR::HeaderInstanceOp> instances;
     SmallPtrSet<Operation *, 5> fieldRefs;
 
@@ -106,6 +105,17 @@ LogicalResult addInstanceForHeader(Operation *op, P4HIR::HeaderType headerTy, Tw
     return success();
 }
 
+LogicalResult addInstanceForHeader(BlockArgument arg, P4HIR::HeaderType headerTy, Twine name,
+                                   PatternRewriter &rewriter) {
+    PatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(arg.getParentBlock());
+    auto newInstance = rewriter.create<BMv2IR::HeaderInstanceOp>(
+        arg.getLoc(), rewriter.getStringAttr(name), P4HIR::ReferenceType::get(headerTy));
+    rewriter.replaceAllUsesWith(arg, newInstance);
+
+    return success();
+}
+
 struct ParserOpPattern : public OpRewritePattern<P4HIR::ParserOp> {
     using OpRewritePattern<P4HIR::ParserOp>::OpRewritePattern;
 
@@ -114,17 +124,16 @@ struct ParserOpPattern : public OpRewritePattern<P4HIR::ParserOp> {
         SmallVector<BlockArgument> argsToProcess;
         for (auto &arg : parserOp.getArguments()) {
             auto ty = arg.getType();
-            if (isa<P4HIR::HeaderType>(ty) || isStructWithHeaders(ty)) {
-                argsToProcess.push_back(arg);
-            }
-        }
-        for (auto arg : argsToProcess) {
             std::string parentName =
                 (parserOp.getSymName() + std::to_string(arg.getArgNumber())).str();
-            // TODO: add support for headers used directly
-            if (failed(splitStructAndAddInstances(arg, parserOp.getLoc(), parentName,
-                                                  parserOp.getBody().front(), rewriter)))
-                return parserOp->emitError("Failed to process parserOp");
+            if (auto headerTy = isHeaderOrRefToHeader(ty)) {
+                if (failed(addInstanceForHeader(arg, headerTy, parentName, rewriter)))
+                    return parserOp->emitError("Failed to process parserOp");
+            } else if (auto structTy = isStructWithHeaders(ty)) {
+                if (failed(splitStructAndAddInstances(arg, structTy, parserOp.getLoc(), parentName,
+                                                      parserOp.getBody().front(), rewriter)))
+                    return parserOp->emitError("Failed to process parserOp");
+            }
         }
         return mlir::success();
     }
@@ -147,9 +156,9 @@ struct VariableOpPattern : public OpRewritePattern<P4HIR::VariableOp> {
         if (!parserParent) return variableOp.emitError("Unexpected VariableOp parent");
 
         auto res = TypeSwitch<Type, LogicalResult>(ty)
-                       .Case([&](P4HIR::StructType) -> LogicalResult {
+                       .Case([&](P4HIR::StructType structTy) -> LogicalResult {
                            if (failed(splitStructAndAddInstances(
-                                   variableOp.getResult(), variableOp.getLoc(), name,
+                                   variableOp.getResult(), structTy, variableOp.getLoc(), name,
                                    parserParent.getBody().front(), rewriter)))
                                return variableOp.emitError("Error translating variableOp");
                            return success();
@@ -174,10 +183,11 @@ struct LowerToHeaderInstancePass
         ConversionTarget target(context);
         target.addLegalDialect<BMv2IR::BMv2IRDialect>();
         target.addLegalDialect<P4HIR::P4HIRDialect>();
+        target.addLegalDialect<P4CoreLib::P4CoreLibDialect>();
         target.addDynamicallyLegalOp<P4HIR::ParserOp>([](P4HIR::ParserOp parserOp) {
             auto argsTy = parserOp.getArgumentTypes();
             return !llvm::any_of(argsTy, [](mlir::Type ty) {
-                return isa<P4HIR::HeaderType>(ty) || isStructWithHeaders(ty);
+                return isHeaderOrRefToHeader(ty) || isStructWithHeaders(ty);
             });
         });
         target.addDynamicallyLegalOp<P4HIR::VariableOp>([](P4HIR::VariableOp varOp) {
