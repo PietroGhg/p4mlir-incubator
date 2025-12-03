@@ -1,4 +1,5 @@
-// RUN: p4mlir-to-json --p4hir-to-bmv2-json %s | FileCheck %s
+// RUN: p4mlir-to-json --p4hir-to-bmv2-json %s --split-input-file | FileCheck %s
+
 !b8i = !p4hir.bit<8>
 #int1_b8i = #p4hir.int<1> : !b8i
 #int2_b8i = #p4hir.int<2> : !b8i
@@ -296,3 +297,165 @@ module {
 // CHECK:    }
 // CHECK:  ]
 // CHECK:}
+
+// -----
+
+!b8i = !p4hir.bit<8>
+module {
+  bmv2ir.parser @prs_only_bit init_state @prs_only_bit::@start {
+    %0 = bmv2ir.header_instance @prs_only_bit2 : !bmv2ir.header<"header_top", [skip:!p4hir.bit<8>], max_length = 1> -> !bmv2ir.header<"header_top", [skip:!p4hir.bit<8>], max_length = 1>
+    %1 = bmv2ir.header_instance @prs_only_bit1 : !bmv2ir.header<"bit_only", [bit:!p4hir.bit<8>], max_length = 1> -> !bmv2ir.header<"bit_only", [bit:!p4hir.bit<8>], max_length = 1>
+    %2 = bmv2ir.header_instance @prs_only_bit_top_0 : !bmv2ir.header<"header_top", [skip:!p4hir.bit<8>], max_length = 1> -> !bmv2ir.header<"header_top", [skip:!p4hir.bit<8>], max_length = 1>
+    bmv2ir.state @start
+     transition_key {
+    }
+     transitions {
+      bmv2ir.transition type  default next_state @prs_only_bit::@accept
+    }
+     parser_ops {
+      bmv2ir.extract  regular @prs_only_bit_top_0
+      %3 = bmv2ir.field @prs_only_bit_top_0["skip"] -> !b8i
+      %4 = bmv2ir.field @prs_only_bit1["bit"] -> !b8i
+      bmv2ir.assign %3 : !b8i to %4 : !b8i
+      %5 = bmv2ir.field @prs_only_bit2["skip"] -> !b8i
+      bmv2ir.assign %4 : !b8i to %5 : !b8i
+    }
+    bmv2ir.state @accept
+     transition_key {
+    }
+     transitions {
+      bmv2ir.transition type  default
+    }
+     parser_ops {
+    }
+  }
+}
+
+// CHECK: {
+// CHECK:   "header_types": [
+// CHECK:     {
+// CHECK:       "fields": [
+// CHECK:         [
+// CHECK:           "skip",
+// CHECK:           8,
+// CHECK:           false
+// CHECK:         ]
+// CHECK:       ],
+// CHECK:       "id": 0,
+// CHECK:       "name": "header_top"
+// CHECK:     },
+// CHECK:     {
+// CHECK:       "fields": [
+// CHECK:         [
+// CHECK:           "bit",
+// CHECK:           8,
+// CHECK:           false
+// CHECK:         ]
+// CHECK:       ],
+// CHECK:       "id": 1,
+// CHECK:       "name": "bit_only"
+// CHECK:     }
+// CHECK:   ],
+// CHECK:   "headers": [
+// CHECK:     {
+// CHECK:       "header_type": "header_top",
+// CHECK:       "id": 0,
+// CHECK:       "metadata": false,
+// CHECK:       "name": "prs_only_bit2"
+// CHECK:     },
+// CHECK:     {
+// CHECK:       "header_type": "bit_only",
+// CHECK:       "id": 1,
+// CHECK:       "metadata": false,
+// CHECK:       "name": "prs_only_bit1"
+// CHECK:     },
+// CHECK:     {
+// CHECK:       "header_type": "header_top",
+// CHECK:       "id": 2,
+// CHECK:       "metadata": false,
+// CHECK:       "name": "prs_only_bit_top_0"
+// CHECK:     }
+// CHECK:   ],
+// CHECK:   "parsers": [
+// CHECK:     {
+// CHECK:       "init_state": "start",
+// CHECK:       "name": "prs_only_bit",
+// CHECK:       "parse_states": [
+// CHECK:         {
+// CHECK:           "name": "start",
+// CHECK:           "parser_ops": [
+// CHECK:             {
+// CHECK:               "op": "extract",
+// CHECK:               "parameters": [
+// CHECK:                 {
+// CHECK:                   "type": "regular",
+// CHECK:                   "value": "e_0"
+// CHECK:                 }
+// CHECK:               ]
+// CHECK:             },
+// CHECK:             {
+// CHECK:               "op": "assign",
+// CHECK:               "parameters": [
+// CHECK:                 {
+// CHECK:                   "type": "field",
+// CHECK:                   "value": [
+// CHECK:                     "prs_only_bit1",
+// CHECK:                     "bit"
+// CHECK:                   ]
+// CHECK:                 },
+// CHECK:                 {
+// CHECK:                   "type": "field",
+// CHECK:                   "value": [
+// CHECK:                     "prs_only_bit_top_0",
+// CHECK:                     "skip"
+// CHECK:                   ]
+// CHECK:                 }
+// CHECK:               ]
+// CHECK:             },
+// CHECK:             {
+// CHECK:               "op": "assign",
+// CHECK:               "parameters": [
+// CHECK:                 {
+// CHECK:                   "type": "field",
+// CHECK:                   "value": [
+// CHECK:                     "prs_only_bit2",
+// CHECK:                     "skip"
+// CHECK:                   ]
+// CHECK:                 },
+// CHECK:                 {
+// CHECK:                   "type": "field",
+// CHECK:                   "value": [
+// CHECK:                     "prs_only_bit1",
+// CHECK:                     "bit"
+// CHECK:                   ]
+// CHECK:                 }
+// CHECK:               ]
+// CHECK:             }
+// CHECK:           ],
+// CHECK:           "transition_key": [],
+// CHECK:           "transitions": [
+// CHECK:             {
+// CHECK:               "mask": null,
+// CHECK:               "next_state": "accept",
+// CHECK:               "type": "default",
+// CHECK:               "value": null
+// CHECK:             }
+// CHECK:           ]
+// CHECK:         },
+// CHECK:         {
+// CHECK:           "name": "accept",
+// CHECK:           "parser_ops": [],
+// CHECK:           "transition_key": [],
+// CHECK:           "transitions": [
+// CHECK:             {
+// CHECK:               "mask": null,
+// CHECK:               "next_state": null,
+// CHECK:               "type": "default",
+// CHECK:               "value": null
+// CHECK:             }
+// CHECK:           ]
+// CHECK:         }
+// CHECK:       ]
+// CHECK:     }
+// CHECK:   ]
+// CHECK: }

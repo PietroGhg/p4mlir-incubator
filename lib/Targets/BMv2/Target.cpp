@@ -34,6 +34,8 @@ static void addUniqueID(json::Array &arr) {
     }
 }
 
+static json::Object toJSON(Operation *op);
+
 static json::Object toJSON(BMv2IR::HeaderType headerTy) {
     json::Object res;
 
@@ -118,11 +120,13 @@ static json::Object toJSON(BMv2IR::LookaheadOp lookAheadOp) {
     return res;
 }
 
-static json::Object toJSON(BMv2IR::AllowedTransitionKey trKey) {
-    // TODO: add other cases
-    return llvm::TypeSwitch<Operation *, json::Object>(trKey.getOperation())
-        .Case([](BMv2IR::LookaheadOp lookAheadOp) { return toJSON(lookAheadOp); })
-        .Default([](Operation *) -> json::Object { llvm_unreachable("Unsupported op"); });
+static json::Object toJSON(BMv2IR::FieldOp fieldOp) {
+    json::Object res;
+    res["type"] = "field";
+    res["value"] = json::Array{fieldOp.getHeaderInstance().getLeafReference().getValue(),
+                               fieldOp.getFieldMember().str()};
+
+    return res;
 }
 
 static json::Object toJSON(BMv2IR::AssignHeaderOp assignOp) {
@@ -140,6 +144,16 @@ static json::Object toJSON(BMv2IR::AssignHeaderOp assignOp) {
     parameters.push_back(std::move(dstNode));
     parameters.push_back(std::move(srcNode));
     res["parameters"] = std::move(parameters);
+    return res;
+}
+
+static json::Object toJSON(BMv2IR::AssignOp assignOp) {
+    json::Object res;
+    res["op"] = "assign";
+    json::Array params;
+    params.push_back(toJSON(assignOp.getDst().getDefiningOp()));
+    params.push_back(toJSON(assignOp.getSrc().getDefiningOp()));
+    res["parameters"] = std::move(params);
     return res;
 }
 
@@ -161,30 +175,32 @@ static json::Object toJSON(BMv2IR::ExtractOp extractOp) {
     return res;
 }
 
-static json::Object toJSON(BMv2IR::AllowedParserOp parserOp) {
-    // TODO: add other cases
-    return llvm::TypeSwitch<Operation *, json::Object>(parserOp.getOperation())
-        .Case([](BMv2IR::AssignHeaderOp assignOp) { return toJSON(assignOp); })
-        .Case([](BMv2IR::ExtractOp extractOp) { return toJSON(extractOp); })
-        .Default([](Operation *) -> json::Object { llvm_unreachable("Unsupported op"); });
-}
-
 static json::Object toJSON(BMv2IR::ParserStateOp stateOp) {
     json::Object res;
     res["name"] = stateOp.getSymName();
 
     json::Array transitions;
-    stateOp.walk([&transitions](BMv2IR::TransitionOp transitionOp) {
-        transitions.push_back(toJSON(transitionOp));
-    });
+    if (!stateOp.getTransitions().empty()) {
+      for (auto& op : stateOp.getTransitions().front()) {
+        transitions.push_back(toJSON(cast<BMv2IR::TransitionOp>(&op)));
+      }
+    }
     res["transitions"] = std::move(transitions);
 
     json::Array keys;
-    stateOp.walk([&keys](BMv2IR::AllowedTransitionKey key) { keys.push_back(toJSON(key)); });
+    if (!stateOp.getTransitionKeys().empty()) {
+      for(auto& op : stateOp.getTransitionKeys().front()) {
+        keys.push_back(toJSON(&op));
+      }
+    }
     res["transition_key"] = std::move(keys);
 
     json::Array ops;
-    stateOp.walk([&ops](BMv2IR::AllowedParserOp op) { ops.push_back(toJSON(op)); });
+    if (!stateOp.getParserOps().empty()) {
+      for(auto& op : stateOp.getParserOps().front()) {
+        if (!isa<BMv2IR::FieldOp>(op)) ops.push_back(toJSON(&op));
+      }
+    }
     res["parser_ops"] = std::move(ops);
 
     return res;
@@ -201,6 +217,19 @@ static json::Object toJSON(BMv2IR::ParserOp parserOp) {
     res["parse_states"] = std::move(states);
 
     return res;
+}
+
+static json::Object toJSON(Operation *op) {
+    return llvm::TypeSwitch<Operation *, json::Object>(op)
+        .Case([](BMv2IR::AssignHeaderOp assignOp) { return toJSON(assignOp); })
+        .Case([](BMv2IR::LookaheadOp lookAheadOp) { return toJSON(lookAheadOp); })
+        .Case([](BMv2IR::AssignOp assignOp) { return toJSON(assignOp); })
+        .Case([](BMv2IR::ExtractOp extractOp) { return toJSON(extractOp); })
+        .Case([](BMv2IR::FieldOp fieldOp) { return toJSON(fieldOp); })
+        .Default([](Operation *op) -> json::Object {
+            llvm::errs() << "Unsupported op: " << op->getName().getIdentifier() << "\n";
+            llvm_unreachable("Unsupported op");
+        });
 }
 
 mlir::FailureOr<json::Value> P4::P4MLIR::bmv2irToJson(ModuleOp moduleOp) {
