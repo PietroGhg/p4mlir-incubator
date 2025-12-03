@@ -12,7 +12,9 @@ include "mlir/Pass/PassBase.td"
 def P4HIRToBmv2IR : Pass<"p4hir-to-bmv2ir", "mlir::ModuleOp"> {
   let summary = "Lowers P4HIR to BMv2IR";
   let description = [{
-    This pass lowers P4HIR operations and types to their BMv2IR counterparts
+    This pass lowers P4HIR operations and types to their BMv2IR counterparts.
+    The pass assumes that Headers have already been lowered to HeaderInstances by
+    `LowerToHeaderInstance`.
   }];
   let dependentDialects = [
       "::P4::P4MLIR::P4HIR::P4HIRDialect",
@@ -37,6 +39,8 @@ def LowerToHeaderInstance : Pass<"lower-to-header-instance", "mlir::ModuleOp"> {
     * structs with only headers or bit fields
     If a struct has both bit fields and headers, the pass will create a new struct with only the
     bit fields (and a corresponding header instance), and separate instances for the header fields.
+    Header instances are added at the start of the ModuleOp's block, and since operations may be
+    `IsolatedFromAbove`, they are accessed via the SymToValue operation.
   }];
   let dependentDialects = [
       "::P4::P4MLIR::P4HIR::P4HIRDialect",

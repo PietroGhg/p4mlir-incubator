@@ -1,9 +1,11 @@
 #ifndef P4MLIR_DIALECT_BMv2IR_BMv2IR_OPS_TD
 #define P4MLIR_DIALECT_BMv2IR_BMv2IR_OPS_TD
 
+include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/Interfaces/ViewLikeInterface.td"
 
 
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.td"
@@ -40,24 +42,26 @@ def BMv2IR_HeaderInstanceOp : BMv2IR_Op<"header_instance", [
     DefaultValuedAttr<BoolAttr, "false">:$metadata
   );
 
-  let results = (outs
-    AnyType:$result
-  );
-  
   let assemblyFormat = [{
-    $sym_name `:` $header_type attr-dict `->` type($result)
+    $sym_name `:` $header_type attr-dict
   }];
-  
-  let builders = [
-    OpBuilder<(ins "mlir::StringRef":$name, "mlir::Type":$headerType), [{
-      build($_builder, $_state, headerType, $_builder.getStringAttr(name), 
-            TypeAttr::get(headerType), $_builder.getBoolAttr(false));
-    }]>,
-    OpBuilder<(ins "mlir::StringRef":$name, "mlir::Type":$headerType, "bool":$isMetadata), [{
-      build($_builder, $_state, headerType, $_builder.getStringAttr(name), 
-            TypeAttr::get(headerType), $_builder.getBoolAttr(isMetadata));
-    }]>
-  ];
+}
+
+def BMv2IR_SymToValueOp : BMv2IR_Op<"symbol_ref",
+  [Pure, NoRegionArguments, AllowedParserOp,
+   DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>
+  ]> {
+
+  let results = (outs AnyType:$result);
+  let arguments = (ins SymbolRefAttr:$decl);
+
+  // TODO: Add verifier
+  let hasVerifier = 0;
+
+  let assemblyFormat = [{
+    $decl attr-dict `:` type($result)
+  }];
 }
 
 def BMv2IR_ParserOp : BMv2IR_Op<"parser", [

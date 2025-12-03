@@ -1,11 +1,13 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LogicalResult.h"
 #include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -73,6 +75,17 @@ struct HeaderInstanceOpConversionPattern : public OpConversionPattern<BMv2IR::He
     }
 };
 
+struct SymToValConversionPattern : public OpConversionPattern<BMv2IR::SymToValueOp> {
+    using OpConversionPattern<BMv2IR::SymToValueOp>::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(BMv2IR::SymToValueOp op, OpAdaptor operands,
+                                  ConversionPatternRewriter &rewriter) const override {
+        auto convertedTy = getTypeConverter()->convertType(op.getType());
+        rewriter.replaceOpWithNewOp<BMv2IR::SymToValueOp>(op, convertedTy, op.getDecl());
+        return success();
+    }
+};
+
 struct ExtractOpConversionPattern : public OpConversionPattern<P4CoreLib::PacketExtractOp> {
     using OpConversionPattern<P4CoreLib::PacketExtractOp>::OpConversionPattern;
 
@@ -83,9 +96,8 @@ struct ExtractOpConversionPattern : public OpConversionPattern<P4CoreLib::Packet
         auto referredTy = hdr.getType().getObjectType();
         if (!isa<P4HIR::HeaderType>(referredTy))
             return op->emitError("Only headers supported as BMv2 extract arguments");
-        auto headerInstanceOp = op.getHdr().getDefiningOp<BMv2IR::HeaderInstanceOp>();
-        if (!headerInstanceOp) return op->emitError("Unsupported extract argument");
-        auto fieldName = headerInstanceOp.getSymName();
+        auto symRefOp = op.getHdr().getDefiningOp<BMv2IR::SymToValueOp>();
+        auto fieldName = symRefOp.getDecl().getLeafReference();
         // TODO: support non-regular extracts
         rewriter.replaceOpWithNewOp<BMv2IR::ExtractOp>(
             op, BMv2IR::ExtractKindAttr::get(context, BMv2IR::ExtractKind::Regular),
@@ -104,13 +116,13 @@ struct AssignOpToAssignHeaderPattern : public OpConversionPattern<P4HIR::AssignO
         auto ctx = rewriter.getContext();
         auto src = operands.getValue();
         auto dst = operands.getRef();
-        auto srcHeaderInstance = src.getDefiningOp<BMv2IR::HeaderInstanceOp>();
+        auto srcHeaderInstance = src.getDefiningOp<BMv2IR::SymToValueOp>();
         if (!srcHeaderInstance) return failure();
-        auto dstHeaderInstance = dst.getDefiningOp<BMv2IR::HeaderInstanceOp>();
+        auto dstHeaderInstance = dst.getDefiningOp<BMv2IR::SymToValueOp>();
         if (!dstHeaderInstance) return failure();
         rewriter.replaceOpWithNewOp<BMv2IR::AssignHeaderOp>(
-            op, SymbolRefAttr::get(ctx, srcHeaderInstance.getSymName()),
-            SymbolRefAttr::get(ctx, dstHeaderInstance.getSymName()));
+            op, SymbolRefAttr::get(ctx, srcHeaderInstance.getDeclAttr().getLeafReference()),
+            SymbolRefAttr::get(ctx, dstHeaderInstance.getDeclAttr().getLeafReference()));
         return success();
     }
     static constexpr unsigned benefit = 100;
@@ -151,10 +163,11 @@ struct FieldRefConversionPattern : public OpConversionPattern<P4HIR::StructField
                                   ConversionPatternRewriter &rewriter) const override {
         auto ctx = rewriter.getContext();
         auto resTy = getTypeConverter()->convertType(op.getResult().getType());
-        auto instance = op.getInput().getDefiningOp<BMv2IR::HeaderInstanceOp>();
+        auto instance = op.getInput().getDefiningOp<BMv2IR::SymToValueOp>();
         if (!instance) return failure();
         rewriter.replaceOpWithNewOp<BMv2IR::FieldOp>(
-            op, resTy, SymbolRefAttr::get(ctx, instance.getSymName()), op.getFieldName());
+            op, resTy, SymbolRefAttr::get(ctx, instance.getDecl().getLeafReference()),
+            op.getFieldName());
         return success();
     }
 };
@@ -347,13 +360,21 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         patterns.add<HeaderInstanceOpConversionPattern, ParserOpConversionPattern,
                      ParserStateOpConversionPattern, ExtractOpConversionPattern,
                      AssignOpToAssignHeaderPattern, AssignOpPattern, ReadOpConversionPattern,
-                     FieldRefConversionPattern>(converter, &context);
+                     FieldRefConversionPattern, SymToValConversionPattern>(converter, &context);
 
         target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+
+        auto isHeaderOrRef = [](Type ty) {
+            if (auto refTy = dyn_cast<P4HIR::ReferenceType>(ty))
+                return isa<BMv2IR::HeaderType>(refTy.getObjectType());
+            return isa<BMv2IR::HeaderType>(ty);
+        };
         target.addDynamicallyLegalOp<BMv2IR::HeaderInstanceOp>(
             [&](BMv2IR::HeaderInstanceOp headerInstanceOp) {
-                return converter.isLegal(headerInstanceOp);
+                return isHeaderOrRef(headerInstanceOp.getHeaderType());
             });
+        target.addDynamicallyLegalOp<BMv2IR::SymToValueOp>(
+            [&](BMv2IR::SymToValueOp op) { return converter.isLegal(op); });
         target.addIllegalOp<P4HIR::ParserOp>();
         target.addIllegalOp<P4HIR::ParserStateOp>();
         target.addIllegalOp<P4CoreLib::PacketExtractOp>();

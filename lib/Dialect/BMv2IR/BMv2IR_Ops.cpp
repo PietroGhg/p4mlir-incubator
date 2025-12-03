@@ -33,6 +33,31 @@ LogicalResult ParserStateOp::verify() {
     return success();
 }
 
+static mlir::ModuleOp getParentModule(Operation *from) {
+    if (auto moduleOp = from->getParentOfType<mlir::ModuleOp>()) return moduleOp;
+
+    from->emitOpError("could not find parent module op");
+    return nullptr;
+}
+
+LogicalResult SymToValueOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+    // Check that the decl attribute was specified.
+    auto declAttr = (*this)->getAttrOfType<SymbolRefAttr>(getDeclAttrName());
+    if (!declAttr) return emitOpError("requires a 'decl' symbol reference attribute");
+
+    auto decl = symbolTable.lookupSymbolIn(getParentModule(*this), declAttr);
+    if (!decl) return emitOpError("cannot resolve symbol '") << declAttr << "' to declaration";
+
+    // if (!mlir::isa<BMv2IR::HeaderInstanceOp>(decl))
+    //     return emitOpError("invalid symbol reference: ") << decl << ", expected header instance";
+
+    return mlir::success();
+}
+
+void SymToValueOp::getAsmResultNames(OpAsmSetValueNameFn setNameFn) {
+    setNameFn(getResult(), getDecl().getLeafReference());
+}
+
 void BMv2IRDialect::initialize() {
     registerTypes();
     registerAttributes();
