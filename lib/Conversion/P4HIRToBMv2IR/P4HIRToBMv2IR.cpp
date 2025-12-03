@@ -1,5 +1,7 @@
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LogicalResult.h"
 #include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -32,19 +34,28 @@ BMv2IR::FieldInfo convertFieldInfo(P4HIR::FieldInfo p4Field) {
     return BMv2IR::FieldInfo(p4Field.name, p4Field.type);
 }
 
+StringRef getStructLikeName(P4HIR::StructLikeTypeInterface structLikeTy) {
+    return llvm::TypeSwitch<P4HIR::StructLikeTypeInterface, StringRef>(structLikeTy)
+        .Case([](P4HIR::HeaderType headerTy) { return headerTy.getName(); })
+        .Case([](P4HIR::StructType structTy) { return structTy.getName(); })
+        .Default([](P4HIR::StructLikeTypeInterface) -> StringRef {
+            llvm_unreachable("Unsupported StructLike Type");
+        });
+}
+
 struct P4HIRToBMv2IRTypeConverter : public mlir::TypeConverter {
     P4HIRToBMv2IRTypeConverter() {
         addConversion([&](mlir::Type t) { return t; });
         addConversion([&](P4HIR::ReferenceType ty) { return convertType(ty.getObjectType()); });
-        addConversion([&](P4HIR::HeaderType headerType) -> Type {
+        addConversion([&](P4HIR::StructLikeTypeInterface structTy) -> Type {
             SmallVector<BMv2IR::FieldInfo> newFields;
-            for (auto field : headerType.getFields()) {
+            for (auto field : structTy.getFields()) {
                 // We drop the validity bit since it is basically implied in BMv2 headers
                 if (isa<P4HIR::ValidBitType>(field.type)) continue;
                 if (!BMv2IR::HeaderType::isAllowedFieldType(field.type)) return nullptr;
                 newFields.push_back(convertFieldInfo(field));
             }
-            return BMv2IR::HeaderType::get(headerType.getContext(), headerType.getName(),
+            return BMv2IR::HeaderType::get(structTy.getContext(), getStructLikeName(structTy),
                                            newFields);
         });
     }
@@ -85,23 +96,65 @@ struct ExtractOpConversionPattern : public OpConversionPattern<P4CoreLib::Packet
 
 // Converts AssignOp between headers to AssignHeadersOp
 struct AssignOpToAssignHeaderPattern : public OpConversionPattern<P4HIR::AssignOp> {
-    using OpConversionPattern<P4HIR::AssignOp>::OpConversionPattern;
+    AssignOpToAssignHeaderPattern(TypeConverter &typeConverter, MLIRContext *context)
+        : OpConversionPattern<P4HIR::AssignOp>(typeConverter, context, benefit) {}
 
     LogicalResult matchAndRewrite(P4HIR::AssignOp op, OpAdaptor operands,
                                   ConversionPatternRewriter &rewriter) const override {
         auto ctx = rewriter.getContext();
-        auto src = op.getValue();
-        auto dst = op.getRef();
-        auto readOp = src.getDefiningOp<P4HIR::ReadOp>();
-        if (!readOp) return failure();
-        auto srcHeaderInstance = readOp.getRef().getDefiningOp<BMv2IR::HeaderInstanceOp>();
+        auto src = operands.getValue();
+        auto dst = operands.getRef();
+        auto srcHeaderInstance = src.getDefiningOp<BMv2IR::HeaderInstanceOp>();
         if (!srcHeaderInstance) return failure();
         auto dstHeaderInstance = dst.getDefiningOp<BMv2IR::HeaderInstanceOp>();
         if (!dstHeaderInstance) return failure();
         rewriter.replaceOpWithNewOp<BMv2IR::AssignHeaderOp>(
             op, SymbolRefAttr::get(ctx, srcHeaderInstance.getSymName()),
             SymbolRefAttr::get(ctx, dstHeaderInstance.getSymName()));
-        rewriter.eraseOp(readOp);
+        return success();
+    }
+    static constexpr unsigned benefit = 100;
+};
+
+// Converts AssignOp between headers to AssignHeadersOp
+struct AssignOpPattern : public OpConversionPattern<P4HIR::AssignOp> {
+    AssignOpPattern(TypeConverter &typeConverter, MLIRContext *context)
+        : OpConversionPattern<P4HIR::AssignOp>(typeConverter, context, benefit) {}
+
+    LogicalResult matchAndRewrite(P4HIR::AssignOp op, OpAdaptor operands,
+                                  ConversionPatternRewriter &rewriter) const override {
+        auto src = operands.getValue();
+        auto dst = operands.getRef();
+        rewriter.replaceOpWithNewOp<BMv2IR::AssignOp>(op, src, dst);
+        return success();
+    }
+    static constexpr unsigned benefit = 1;
+};
+
+// Drops ReadOps since we don't have the reference type in BMv2IR
+struct ReadOpConversionPattern : public OpConversionPattern<P4HIR::ReadOp> {
+    using OpConversionPattern<P4HIR::ReadOp>::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(P4HIR::ReadOp op, OpAdaptor operands,
+                                  ConversionPatternRewriter &rewriter) const override {
+        auto ref = op.getRef();
+        rewriter.replaceOp(op, {ref});
+        return success();
+    }
+};
+
+// Converts StructFieldRefOp to BMv2IR::FieldOp
+struct FieldRefConversionPattern : public OpConversionPattern<P4HIR::StructFieldRefOp> {
+    using OpConversionPattern<P4HIR::StructFieldRefOp>::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(P4HIR::StructFieldRefOp op, OpAdaptor operands,
+                                  ConversionPatternRewriter &rewriter) const override {
+        auto ctx = rewriter.getContext();
+        auto resTy = getTypeConverter()->convertType(op.getResult().getType());
+        auto instance = op.getInput().getDefiningOp<BMv2IR::HeaderInstanceOp>();
+        if (!instance) return failure();
+        rewriter.replaceOpWithNewOp<BMv2IR::FieldOp>(
+            op, resTy, SymbolRefAttr::get(ctx, instance.getSymName()), op.getFieldName());
         return success();
     }
 };
@@ -293,7 +346,8 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         P4HIRToBMv2IRTypeConverter converter;
         patterns.add<HeaderInstanceOpConversionPattern, ParserOpConversionPattern,
                      ParserStateOpConversionPattern, ExtractOpConversionPattern,
-                     AssignOpToAssignHeaderPattern>(converter, &context);
+                     AssignOpToAssignHeaderPattern, AssignOpPattern, ReadOpConversionPattern,
+                     FieldRefConversionPattern>(converter, &context);
 
         target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
         target.addDynamicallyLegalOp<BMv2IR::HeaderInstanceOp>(
@@ -304,6 +358,8 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         target.addIllegalOp<P4HIR::ParserStateOp>();
         target.addIllegalOp<P4CoreLib::PacketExtractOp>();
         target.addIllegalOp<P4HIR::AssignOp>();
+        target.addIllegalOp<P4HIR::StructFieldRefOp>();
+        target.addIllegalOp<P4HIR::ReadOp>();
 
         if (failed(applyPartialConversion(module, target, std::move(patterns))))
             signalPassFailure();

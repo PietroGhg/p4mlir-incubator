@@ -3,6 +3,7 @@
 
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
 
 
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.td"
@@ -186,24 +187,43 @@ def BMv2_AssignHeaderOp : BMv2IR_Op<"assign_header", [AllowedParserOp]> {
   }];
 }
 
+def BMv2_AssignOp : BMv2IR_Op<"assign", [AllowedParserOp]> {
+  let summary = "Assign operation";
+  let description = [{
+    Assigns the first argument to the second argument.
+  }];
+
+  // FIXME: refine types
+  let arguments = (ins AnyType:$src,
+                       AnyType:$dst);
+  
+  let assemblyFormat = [{
+    $src `:` type($src) `to` $dst `:` type($dst) attr-dict
+  }];
+}
+
 //===-------------------------------------------------------------------------------------------===//
 // BMv2 type-value fields
 // see https://github.com/p4lang/behavioral-model/blob/main/docs/JSON_format.md#the-type-value-object
 //===-------------------------------------------------------------------------------------------===//
 
-def BMv2IR_FieldOp : BMv2IR_Op<"field", [AllowedTransitionKey]> {
+def BMv2IR_FieldOp : BMv2IR_Op<"field", [AllowedTransitionKey, AllowedParserOp]> {
   let summary = "BMv2 header field access";
   let description = [{
     Represents access to a field within a header instance.
+    Since in BMv2 header instances can contain only bits, this op can return only bits.
     Contains a 2-tuple: (header_instance_name, field_member_name)
   }];
   
   let arguments = (ins
-    StrAttr:$headerInstance,
+    SymbolRefAttr:$headerInstance,
     StrAttr:$fieldMember
   );
   
-  let assemblyFormat = "`<` $headerInstance `,` $fieldMember `>` attr-dict";
+  let results = (outs 
+    BMv2IR_FieldType:$res); 
+  
+  let assemblyFormat = "$headerInstance `[` $fieldMember `]` `->` type($res) attr-dict";
 }
 
 def BMv2_StackFieldOp : BMv2IR_Op<"stack_field", [AllowedTransitionKey]> {

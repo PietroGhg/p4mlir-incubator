@@ -1,6 +1,7 @@
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Ops.h"
 
 #include "mlir/IR/Builders.h"
+#include "p4mlir//Dialect/P4HIR/P4HIR_Types.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_OpInterfaces.h"
 

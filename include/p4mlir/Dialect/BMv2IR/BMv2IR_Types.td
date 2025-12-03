@@ -5,6 +5,7 @@ include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinTypes.td"
 
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.td"
+include "p4mlir/Dialect/P4HIR/P4HIR_Types.td"
 
 //===----------------------------------------------------------------------===//
 // BMv2IR type definitions.
@@ -57,5 +58,7 @@ def BMv2IR_HeaderType : BMv2IR_Type<"Header", "header"> {
     static bool isAllowedFieldType(mlir::Type ty);
   }];
 }
+
+def BMv2IR_FieldType : AnyTypeOf<[BitsType, VarBitsType]>;
 
 #endif // P4MLIR_DIALECT_BMv2IR_BMv2IR_TYPES_TD
