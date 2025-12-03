@@ -64,7 +64,7 @@ static json::Object toJSON(BMv2IR::HeaderType headerTy) {
 
 static json::Object toJSON(BMv2IR::HeaderInstanceOp headerInstance) {
     json::Object res;
-    auto name = cast<BMv2IR::HeaderType>(headerInstance.getType()).getName();
+    auto name = cast<BMv2IR::HeaderType>(headerInstance.getHeaderType()).getName();
     res["name"] = headerInstance.getSymName().str();
     res["header_type"] = name.str();
     res["metadata"] = headerInstance.getMetadata();
@@ -242,7 +242,7 @@ mlir::FailureOr<json::Value> P4::P4MLIR::bmv2irToJson(ModuleOp moduleOp) {
     json::Array headerTyNodes;
     json::Array headerInstanceNodes;
     for (auto instance : headerInstances) {
-        auto headerTy = dyn_cast<BMv2IR::HeaderType>(instance.getType());
+        auto headerTy = dyn_cast<BMv2IR::HeaderType>(instance.getHeaderType());
         if (!headerTy) return instance.emitError("Unexpected type");
         bool inserted = headersTy.insert(headerTy);
         if (inserted) headerTyNodes.push_back(toJSON(headerTy));
