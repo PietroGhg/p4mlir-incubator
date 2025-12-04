@@ -242,7 +242,7 @@ mlir::FailureOr<json::Value> P4::P4MLIR::bmv2irToJson(ModuleOp moduleOp) {
     json::Array headerTyNodes;
     json::Array headerInstanceNodes;
     for (auto instance : headerInstances) {
-        auto headerTy = dyn_cast<BMv2IR::HeaderType>(instance.getHeaderType());
+        auto headerTy = cast<BMv2IR::HeaderType>(instance.getHeaderType());
         if (!headerTy) return instance.emitError("Unexpected type");
         bool inserted = headersTy.insert(headerTy);
         if (inserted) headerTyNodes.push_back(toJSON(headerTy));
