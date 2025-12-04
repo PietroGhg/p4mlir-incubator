@@ -11,11 +11,15 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Types.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Support/LLVM.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Attrs.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_OpInterfaces.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Types.h"
+#include "p4mlir/Dialect/P4HIR/P4HIR_Attrs.h"
+#include "p4mlir/Dialect/P4HIR/P4HIR_Types.h"
 #define GET_OP_CLASSES
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Ops.h.inc"
 

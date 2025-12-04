@@ -5,8 +5,6 @@ include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
-include "mlir/Interfaces/ViewLikeInterface.td"
-
 
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.td"
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Types.td"
@@ -152,7 +150,7 @@ def BMv2IR_TransitionOp : BMv2IR_Op<"transition", [HasParent<"ParserStateOp">]> 
 }
 
 
-def BMv2_ExtractOp : BMv2IR_Op<"extract", [HasParent<"ParserStateOp">, AllowedParserOp]> {
+def BMv2IR_ExtractOp : BMv2IR_Op<"extract", [HasParent<"ParserStateOp">, AllowedParserOp]> {
   let summary = "Extract header operation";
   let description = [{
     Extracts the field of a header instance, header stack, or union stack element.
@@ -174,7 +172,7 @@ def BMv2_ExtractOp : BMv2IR_Op<"extract", [HasParent<"ParserStateOp">, AllowedPa
   }];
 }
 
-def BMv2_AssignHeaderOp : BMv2IR_Op<"assign_header", [AllowedParserOp]> {
+def BMv2IR_AssignHeaderOp : BMv2IR_Op<"assign_header", [AllowedParserOp]> {
   let summary = "Assign header operation";
   let description = [{
     Assigns one header instance to another.
@@ -191,7 +189,7 @@ def BMv2_AssignHeaderOp : BMv2IR_Op<"assign_header", [AllowedParserOp]> {
   }];
 }
 
-def BMv2_AssignOp : BMv2IR_Op<"assign", [AllowedParserOp]> {
+def BMv2IR_AssignOp : BMv2IR_Op<"assign", [AllowedParserOp]> {
   let summary = "Assign operation";
   let description = [{
     Assigns the first argument to the second argument.
@@ -204,6 +202,34 @@ def BMv2_AssignOp : BMv2IR_Op<"assign", [AllowedParserOp]> {
   let assemblyFormat = [{
     $src `:` type($src) `to` $dst `:` type($dst) attr-dict
   }];
+}
+
+def BMv2IR_ActionOp : BMv2IR_Op<"action"> {
+  let summary = "Define a BMv2 action";
+  let description = [{
+    BMv2 actions aren't `IsolatedFromAbove` since they need to access header
+    instances that live outside their scope.
+    Only BitsType are supported as arguments.
+  }];
+
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       TypeAttrOf<FuncType>:$function_type
+                  );
+  let regions = (region AnyRegion:$body);
+  //let skipDefaultBuilders = 1;
+
+  //let builders = [
+  //  OpBuilder<(ins "llvm::StringRef":$name, "P4HIR::FuncType":$type,
+  //             CArg<"bool", "false">:$isExternal,
+  //             CArg<"mlir::DictionaryAttr", "{}">:$annotations
+  //             )>
+  //];
+
+
+  let assemblyFormat = [{
+    $sym_name $body attr-dict
+  }];
+  let hasVerifier = 1;
 }
 
 //===-------------------------------------------------------------------------------------------===//

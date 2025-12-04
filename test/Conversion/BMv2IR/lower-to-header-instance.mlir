@@ -160,3 +160,90 @@ module {
     p4hir.transition to @prs_only_bit::@start
   }
 }
+
+// -----
+
+!infint = !p4hir.infint
+!error = !p4hir.error<NoError, PacketTooShort, NoMatch, StackOutOfBounds, HeaderTooShort, ParserTimeout, ParserInvalidArgument>
+!b1i = !p4hir.bit<1>
+!b3i = !p4hir.bit<3>
+!b4i = !p4hir.bit<4>
+!b8i = !p4hir.bit<8>
+!b9i = !p4hir.bit<9>
+!b12i = !p4hir.bit<12>
+!b13i = !p4hir.bit<13>
+!b16i = !p4hir.bit<16>
+!b19i = !p4hir.bit<19>
+!b32i = !p4hir.bit<32>
+!b48i = !p4hir.bit<48>
+!validity_bit = !p4hir.validity.bit
+!ethernet_t = !p4hir.header<"ethernet_t", dstAddr: !b48i, srcAddr: !b48i, etherType: !b16i, __valid: !validity_bit>
+!ipv4_t = !p4hir.header<"ipv4_t", version: !b4i, ihl: !b4i, diffserv: !b8i, totalLen: !b16i, identification: !b16i, flags: !b3i, fragOffset: !b13i, ttl: !b8i, protocol: !b8i, hdrChecksum: !b16i, srcAddr: !b32i, dstAddr: !b32i, __valid: !validity_bit>
+!headers = !p4hir.struct<"headers", ethernet: !ethernet_t, ipv4: !ipv4_t>
+!ingress_metadata_t = !p4hir.struct<"ingress_metadata_t", vrf: !b12i, bd: !b16i, nexthop_index: !b16i>
+!anon = !p4hir.enum<on_miss, rewrite_src_dst_mac, NoAction_2>
+!standard_metadata_t = !p4hir.struct<"standard_metadata_t" {metadata = [], name = "standard_metadata"}, ingress_port: !b9i, egress_spec: !b9i, egress_port: !b9i, instance_type: !b32i, packet_length: !b32i, enq_timestamp: !b32i {alias = ["queueing_metadata.enq_timestamp"]}, enq_qdepth: !b19i {alias = ["queueing_metadata.enq_qdepth"]}, deq_timedelta: !b32i {alias = ["queueing_metadata.deq_timedelta"]}, deq_qdepth: !b19i {alias = ["queueing_metadata.deq_qdepth"]}, ingress_global_timestamp: !b48i {alias = ["intrinsic_metadata.ingress_global_timestamp"]}, egress_global_timestamp: !b48i {alias = ["intrinsic_metadata.egress_global_timestamp"]}, mcast_grp: !b16i {alias = ["intrinsic_metadata.mcast_grp"]}, egress_rid: !b16i {alias = ["intrinsic_metadata.egress_rid"]}, checksum_error: !b1i, parser_error: !error, priority: !b3i {alias = ["intrinsic_metadata.priority"]}>
+!rewrite_mac_0 = !p4hir.struct<"rewrite_mac_0", hit: !p4hir.bool, miss: !p4hir.bool, action_run: !anon>
+#inout = #p4hir<dir inout>
+#undir = #p4hir<dir undir>
+#exact = #p4hir.match_kind<"exact">
+#int32768_infint = #p4hir.int<32768> : !infint
+module {
+// CHECK: bmv2ir.header_instance @egress1 : !p4hir.ref<!ingress_metadata_t>
+// CHECK: bmv2ir.header_instance @egress0_ethernet : !p4hir.ref<!ethernet_t>
+  p4hir.control @egress(%arg0: !p4hir.ref<!headers> {p4hir.dir = #inout, p4hir.param_name = "hdr"}, %arg1: !p4hir.ref<!ingress_metadata_t> {p4hir.dir = #inout, p4hir.param_name = "meta"}, %arg2: !p4hir.ref<!standard_metadata_t> {p4hir.dir = #inout, p4hir.param_name = "standard_metadata"})() {
+    p4hir.control_local @__local_egress_hdr_0 = %arg0 : !p4hir.ref<!headers>
+    p4hir.control_local @__local_egress_meta_0 = %arg1 : !p4hir.ref<!ingress_metadata_t>
+    p4hir.control_local @__local_egress_standard_metadata_0 = %arg2 : !p4hir.ref<!standard_metadata_t>
+// CHECK-NOT: p4hir.control_local
+    p4hir.func action @NoAction_2() annotations {name = ".NoAction", noWarn = "unused"} {
+      p4hir.return
+    }
+    p4hir.func action @on_miss() annotations {name = "egress.on_miss"} {
+      p4hir.return
+    }
+    p4hir.func action @rewrite_src_dst_mac(%arg3: !b48i {p4hir.annotations = {name = "smac"}, p4hir.dir = #undir, p4hir.param_name = "smac"}, %arg4: !b48i {p4hir.annotations = {name = "dmac"}, p4hir.dir = #undir, p4hir.param_name = "dmac"}) annotations {name = "egress.rewrite_src_dst_mac"} {
+      %__local_egress_hdr_0 = p4hir.symbol_ref @egress::@__local_egress_hdr_0 : !p4hir.ref<!headers>
+// CHECK-NOT: p4hir.symbol_ref
+// CHECK: %[[REF:.*]] = bmv2ir.symbol_ref @egress0_ethernet : !p4hir.ref<!ethernet_t>
+// CHECK: %{{.*}} = p4hir.struct_field_ref %[[REF]]["srcAddr"] : <!ethernet_t>
+      %ethernet_field_ref = p4hir.struct_field_ref %__local_egress_hdr_0["ethernet"] : <!headers>
+      %srcAddr_field_ref = p4hir.struct_field_ref %ethernet_field_ref["srcAddr"] : <!ethernet_t>
+      p4hir.assign %arg3, %srcAddr_field_ref : <!b48i>
+      %__local_egress_hdr_0_0 = p4hir.symbol_ref @egress::@__local_egress_hdr_0 : !p4hir.ref<!headers>
+      %ethernet_field_ref_1 = p4hir.struct_field_ref %__local_egress_hdr_0_0["ethernet"] : <!headers>
+      %dstAddr_field_ref = p4hir.struct_field_ref %ethernet_field_ref_1["dstAddr"] : <!ethernet_t>
+      p4hir.assign %arg4, %dstAddr_field_ref : <!b48i>
+      %__local_egress_meta_0 = p4hir.symbol_ref @egress::@__local_egress_meta_0 : !p4hir.ref<!ingress_metadata_t>
+      %vrf_ref = p4hir.struct_field_ref %__local_egress_meta_0["vrf"] : <!ingress_metadata_t>
+// CHECK: %[[REF2:.*]] = bmv2ir.symbol_ref @egress1 : !p4hir.ref<!ingress_metadata_t>
+// CHECK: %{{.*}} = p4hir.struct_field_ref %[[REF2]]["vrf"] : <!ingress_metadata_t>
+      p4hir.return
+    }
+    p4hir.table @rewrite_mac_0 annotations {name = "egress.rewrite_mac"} {
+      p4hir.table_actions {
+        p4hir.table_action @on_miss() {
+          p4hir.call @egress::@on_miss () : () -> ()
+        }
+        p4hir.table_action @rewrite_src_dst_mac(%arg3: !b48i {p4hir.annotations = {name = "smac"}, p4hir.param_name = "smac"}, %arg4: !b48i {p4hir.annotations = {name = "dmac"}, p4hir.param_name = "dmac"}) {
+          p4hir.call @egress::@rewrite_src_dst_mac (%arg3, %arg4) : (!b48i, !b48i) -> ()
+        }
+        p4hir.table_action @NoAction_2() annotations {defaultonly} {
+          p4hir.call @egress::@NoAction_2 () : () -> ()
+        }
+      }
+      p4hir.table_key {
+        %nexthop_index_ref = p4hir.struct_field_ref %arg1["nexthop_index"] : <!ingress_metadata_t>
+        %nexthop_index = p4hir.read %nexthop_index_ref : <!b16i>
+        p4hir.match_key #exact %nexthop_index : !b16i annotations {name = "meta.ingress_metadata.nexthop_index"}
+      }
+      %size = p4hir.table_size #int32768_infint
+      p4hir.table_default_action {
+        p4hir.call @egress::@NoAction_2 () : () -> ()
+      }
+    }
+    p4hir.control_apply {
+      %rewrite_mac_0_apply_result = p4hir.table_apply @egress::@rewrite_mac_0 : !rewrite_mac_0
+    }
+  }
+}
