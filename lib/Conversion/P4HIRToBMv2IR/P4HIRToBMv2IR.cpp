@@ -353,33 +353,6 @@ struct ParserOpConversionPattern : public OpConversionPattern<P4HIR::ParserOp> {
     }
 };
 
-struct ActionConversionPattern : public OpConversionPattern<P4HIR::FuncOp> {
-    using OpConversionPattern<P4HIR::FuncOp>::OpConversionPattern;
-
-    LogicalResult matchAndRewrite(P4HIR::FuncOp op, OpAdaptor operands,
-                                  ConversionPatternRewriter &rewriter) const override {
-        auto loc = op.getLoc();
-        if (!op.getAction()) return failure();
-        auto action =
-            rewriter.create<BMv2IR::ActionOp>(loc, op.getSymNameAttr(), op.getFunctionType());
-        auto &region = action.getRegion();
-        region.takeBody(op.getRegion());
-        rewriter.replaceOp(op, action);
-        return success();
-    }
-};
-
-struct ReturnOpConversionPattern : public OpConversionPattern<P4HIR::ReturnOp> {
-    using OpConversionPattern<P4HIR::ReturnOp>::OpConversionPattern;
-
-    LogicalResult matchAndRewrite(P4HIR::ReturnOp op, OpAdaptor operands,
-                                  ConversionPatternRewriter &rewriter) const override {
-        if (op.hasOperand()) return op.emitError("Expected no operands to ReturnOp");
-        rewriter.replaceOpWithNewOp<BMv2IR::ReturnOp>(op);
-        return success();
-    }
-};
-
 struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv2IRPass> {
     void runOnOperation() override {
         MLIRContext &context = getContext();
@@ -390,8 +363,7 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         patterns.add<HeaderInstanceOpConversionPattern, ParserOpConversionPattern,
                      ParserStateOpConversionPattern, ExtractOpConversionPattern,
                      AssignOpToAssignHeaderPattern, AssignOpPattern, ReadOpConversionPattern,
-                     FieldRefConversionPattern, SymToValConversionPattern, ActionConversionPattern,
-                     ReturnOpConversionPattern>(converter, &context);
+                     FieldRefConversionPattern, SymToValConversionPattern>(converter, &context);
 
         target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
@@ -412,9 +384,6 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         target.addIllegalOp<P4HIR::AssignOp>();
         target.addIllegalOp<P4HIR::StructFieldRefOp>();
         target.addIllegalOp<P4HIR::ReadOp>();
-        target.addIllegalOp<P4HIR::ReturnOp>();
-        target.addDynamicallyLegalOp<P4HIR::FuncOp>(
-            [](P4HIR::FuncOp funcOp) { return !funcOp.getAction(); });
 
         if (failed(applyPartialConversion(module, target, std::move(patterns))))
             signalPassFailure();

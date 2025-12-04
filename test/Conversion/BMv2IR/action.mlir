@@ -26,12 +26,6 @@
 module {
   bmv2ir.header_instance @egress0_ethernet : !p4hir.ref<!ethernet_t>
 // CHECK:  bmv2ir.header_instance @egress0_ethernet : !bmv2ir.header<"ethernet_t", [dstAddr:!p4hir.bit<48>, srcAddr:!p4hir.bit<48>, etherType:!p4hir.bit<16>], max_length = 14>
-    p4hir.func action @NoAction_2() annotations {name = ".NoAction", noWarn = "unused"} {
-      p4hir.return
-    }
-// CHECK:  bmv2ir.action @NoAction_2 {
-// CHECK:    bmv2ir.return
-// CHECK:  } {function_type = !p4hir.func<()>}
     p4hir.func action @rewrite_src_dst_mac(%arg3: !b48i {p4hir.annotations = {name = "smac"}, p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "smac"}, %arg4: !b48i {p4hir.annotations = {name = "dmac"}, p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "dmac"}) annotations {name = "egress.rewrite_src_dst_mac"} {
       %egress0_ethernet = bmv2ir.symbol_ref @egress0_ethernet : !p4hir.ref<!ethernet_t>
       %srcAddr_field_ref = p4hir.struct_field_ref %egress0_ethernet["srcAddr"] : <!ethernet_t>
@@ -41,13 +35,13 @@ module {
       p4hir.assign %arg4, %dstAddr_field_ref : <!b48i>
       p4hir.return
     }
-// CHECK:  bmv2ir.action @rewrite_src_dst_mac {
-// CHECK:  ^bb0(%[[ARG0:.*]]: !b48i, %[[ARG1:.*]]: !b48i):
-// CHECK:    %[[REF:.*]] = bmv2ir.field @egress0_ethernet["srcAddr"] -> !b48i
-// CHECK:    bmv2ir.assign %[[ARG0]] : !b48i to %[[REF]] : !b48i
-// CHECK:    %[[REF2:.*]] = bmv2ir.field @egress0_ethernet["dstAddr"] -> !b48i
-// CHECK:    bmv2ir.assign %[[ARG1]] : !b48i to %[[REF2]] : !b48i
-// CHECK:    bmv2ir.return
-// CHECK:  } {function_type = !p4hir.func<(!b48i, !b48i)>}
+// CHECK: p4hir.func action @rewrite_src_dst_mac(%arg0: !b48i {p4hir.annotations = {name = "smac"}, p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "smac"}, %arg1: !b48i {p4hir.annotations = {name = "dmac"}, p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "dmac"}) annotations {name = "egress.rewrite_src_dst_mac"} {
+// CHECK:  %0 = bmv2ir.field @egress0_ethernet["srcAddr"] -> !b48i
+// CHECK:  bmv2ir.assign %arg0 : !b48i to %0 : !b48i
+// CHECK:  %1 = bmv2ir.field @egress0_ethernet["dstAddr"] -> !b48i
+// CHECK:  bmv2ir.assign %arg1 : !b48i to %1 : !b48i
+// CHECK:  p4hir.return
+// CHECK: }
+
 
 }

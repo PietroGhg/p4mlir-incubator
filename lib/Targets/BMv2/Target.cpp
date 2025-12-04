@@ -11,6 +11,7 @@
 #include "llvm/Support/LogicalResult.h"
 #include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
@@ -34,6 +35,7 @@ static void addUniqueID(json::Array &arr) {
     }
 }
 
+static json::Object toJSON(Value val);
 static json::Object toJSON(Operation *op);
 
 static json::Object toJSON(BMv2IR::HeaderType headerTy) {
@@ -151,8 +153,8 @@ static json::Object toJSON(BMv2IR::AssignOp assignOp) {
     json::Object res;
     res["op"] = "assign";
     json::Array params;
-    params.push_back(toJSON(assignOp.getDst().getDefiningOp()));
-    params.push_back(toJSON(assignOp.getSrc().getDefiningOp()));
+    params.push_back(toJSON(assignOp.getDst()));
+    params.push_back(toJSON(assignOp.getSrc()));
     res["parameters"] = std::move(params);
     return res;
 }
@@ -174,6 +176,10 @@ static json::Object toJSON(BMv2IR::ExtractOp extractOp) {
     res["parameters"] = std::move(parameters);
     return res;
 }
+
+// Returns true for Operations that we don't want to emit directly
+// when emitting lists of primitives
+static bool skipOpEmission(Operation *op) { return isa<BMv2IR::FieldOp, P4HIR::ReturnOp>(op); }
 
 static json::Object toJSON(BMv2IR::ParserStateOp stateOp) {
     json::Object res;
@@ -198,7 +204,7 @@ static json::Object toJSON(BMv2IR::ParserStateOp stateOp) {
     json::Array ops;
     if (!stateOp.getParserOps().empty()) {
       for(auto& op : stateOp.getParserOps().front()) {
-        if (!isa<BMv2IR::FieldOp>(op)) ops.push_back(toJSON(&op));
+          if (!skipOpEmission(&op)) ops.push_back(toJSON(&op));
       }
     }
     res["parser_ops"] = std::move(ops);
@@ -219,6 +225,32 @@ static json::Object toJSON(BMv2IR::ParserOp parserOp) {
     return res;
 }
 
+static json::Object actionToJSON(P4HIR::FuncOp actionOp) {
+    json::Object res;
+    res["name"] = actionOp.getSymName();
+
+    json::Array params;
+    for (auto arg : actionOp.getArguments()) {
+        json::Object paramDesc;
+        paramDesc["name"] = actionOp.getArgumentName(arg.getArgNumber()).getValue();
+        paramDesc["bitwidth"] = cast<P4HIR::BitsType>(arg.getType()).getWidth();
+        params.push_back(std::move(paramDesc));
+    }
+    res["runtime_data"] = std::move(params);
+
+    json::Array ops;
+    for (auto &op : actionOp.getOps()) {
+        if (!skipOpEmission(&op)) ops.push_back(toJSON(&op));
+    }
+    res["primitives"] = std::move(ops);
+    return res;
+}
+
+static json::Object toJSON(P4HIR::FuncOp funcOp) {
+    if (funcOp.getAction()) return actionToJSON(funcOp);
+    llvm_unreachable("Only Actions JSON conversion supported");
+}
+
 static json::Object toJSON(Operation *op) {
     return llvm::TypeSwitch<Operation *, json::Object>(op)
         .Case([](BMv2IR::AssignHeaderOp assignOp) { return toJSON(assignOp); })
@@ -230,6 +262,23 @@ static json::Object toJSON(Operation *op) {
             llvm::errs() << "Unsupported op: " << op->getName().getIdentifier() << "\n";
             llvm_unreachable("Unsupported op");
         });
+}
+
+static json::Object toJSON(BlockArgument arg) {
+    auto parent = arg.getParentBlock()->getParentOp();
+    assert(parent && "Expected blockarg parentOp");
+    auto funcOp = cast<P4HIR::FuncOp>(parent);
+    assert(funcOp.getAction() && "Expected action");
+    json::Object res;
+
+    res["type"] = "runtime_data";
+    res["value"] = arg.getArgNumber();
+    return res;
+}
+
+static json::Object toJSON(Value val) {
+    if (auto op = val.getDefiningOp()) return toJSON(op);
+    return toJSON(cast<BlockArgument>(val));
 }
 
 mlir::FailureOr<json::Value> P4::P4MLIR::bmv2irToJson(ModuleOp moduleOp) {
@@ -255,8 +304,15 @@ mlir::FailureOr<json::Value> P4::P4MLIR::bmv2irToJson(ModuleOp moduleOp) {
 
     // Emit parsers
     json::Array parsers;
-    moduleOp.walk([&parsers](BMv2IR::ParserOp parserOp) { parsers.push_back(toJSON(parserOp)); });
+    moduleOp.walk([&](BMv2IR::ParserOp parserOp) { parsers.push_back(toJSON(parserOp)); });
     root["parsers"] = std::move(parsers);
+
+    // Emit actions
+    json::Array actions;
+    moduleOp.walk([&](P4HIR::FuncOp funcOp) {
+        if (funcOp.getAction()) actions.push_back(toJSON(funcOp));
+    });
+    root["actions"] = std::move(actions);
 
     json::Value res(std::move(root));
 

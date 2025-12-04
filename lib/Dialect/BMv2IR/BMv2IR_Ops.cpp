@@ -59,11 +59,6 @@ void SymToValueOp::getAsmResultNames(OpAsmSetValueNameFn setNameFn) {
     setNameFn(getResult(), getDecl().getLeafReference());
 }
 
-LogicalResult ActionOp::verify() {
-    // TODO: add checks
-    return success();
-}
-
 void BMv2IRDialect::initialize() {
     registerTypes();
     registerAttributes();

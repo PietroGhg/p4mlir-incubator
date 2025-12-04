@@ -11,8 +11,8 @@ include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.td"
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Types.td"
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Attrs.td"
 include "p4mlir/Dialect/BMv2IR/BMv2IR_OpInterfaces.td"
-
 include "p4mlir/Dialect/P4HIR/P4HIR_Types.td"
+include "p4mlir/Dialect/P4HIR/P4HIR_OpInterfaces.td"
 
 
 //===----------------------------------------------------------------------===//
@@ -203,45 +203,6 @@ def BMv2IR_AssignOp : BMv2IR_Op<"assign", [AllowedParserOp]> {
   let assemblyFormat = [{
     $src `:` type($src) `to` $dst `:` type($dst) attr-dict
   }];
-}
-
-def BMv2IR_ActionOp : BMv2IR_Op<"action"> {
-  let summary = "Define a BMv2 action";
-  let description = [{
-    BMv2 actions aren't `IsolatedFromAbove` since they need to access header
-    instances that live outside their scope.
-    Only BitsType are supported as arguments.
-  }];
-
-  let arguments = (ins SymbolNameAttr:$sym_name,
-                       TypeAttrOf<FuncType>:$function_type
-                  );
-  let regions = (region AnyRegion:$body);
-  //let skipDefaultBuilders = 1;
-
-  //let builders = [
-  //  OpBuilder<(ins "llvm::StringRef":$name, "P4HIR::FuncType":$type,
-  //             CArg<"bool", "false">:$isExternal,
-  //             CArg<"mlir::DictionaryAttr", "{}">:$annotations
-  //             )>
-  //];
-
-
-  let assemblyFormat = [{
-    $sym_name $body attr-dict
-  }];
-  let hasVerifier = 1;
-}
-
-def BMv2IR_ReturnOp : BMv2IR_Op<"return", [HasParent<"ActionOp">,
-                                             ReturnLike, Terminator, NoMemoryEffect,
-                                   ]> {
-  let summary = "Return from function or action";
-  let description = [{
-    BMv2 actions have no return value, so this simply acts as block terminator.
-  }];
-
-  let assemblyFormat = "attr-dict ";
 }
 
 //===-------------------------------------------------------------------------------------------===//
