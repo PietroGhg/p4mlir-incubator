@@ -384,6 +384,7 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         target.addIllegalOp<P4HIR::AssignOp>();
         target.addIllegalOp<P4HIR::StructFieldRefOp>();
         target.addIllegalOp<P4HIR::ReadOp>();
+        target.addDynamicallyLegalOp<P4HIR::FuncOp>([](P4HIR::FuncOp funcOp) { return funcOp.getAction(); });
 
         if (failed(applyPartialConversion(module, target, std::move(patterns))))
             signalPassFailure();
