@@ -4,6 +4,7 @@
 include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.td"
@@ -230,6 +231,17 @@ def BMv2IR_ActionOp : BMv2IR_Op<"action"> {
     $sym_name $body attr-dict
   }];
   let hasVerifier = 1;
+}
+
+def BMv2IR_ReturnOp : BMv2IR_Op<"return", [HasParent<"ActionOp">,
+                                             ReturnLike, Terminator, NoMemoryEffect,
+                                   ]> {
+  let summary = "Return from function or action";
+  let description = [{
+    BMv2 actions have no return value, so this simply acts as block terminator.
+  }];
+
+  let assemblyFormat = "attr-dict ";
 }
 
 //===-------------------------------------------------------------------------------------------===//
