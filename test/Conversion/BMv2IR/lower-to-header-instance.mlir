@@ -189,6 +189,7 @@ module {
 #undir = #p4hir<dir undir>
 #exact = #p4hir.match_kind<"exact">
 #int32768_infint = #p4hir.int<32768> : !infint
+#int-1_b8i = #p4hir.int<255> : !b8i
 module {
 // CHECK: bmv2ir.header_instance @egress1 : !p4hir.ref<!ingress_metadata_t>
 // CHECK: bmv2ir.header_instance @egress0_ethernet : !p4hir.ref<!ethernet_t>
@@ -203,6 +204,7 @@ module {
     p4hir.func action @on_miss() annotations {name = "egress.on_miss"} {
       p4hir.return
     }
+// CHECK-LABEL: p4hir.func action @rewrite_src_dst_mac
     p4hir.func action @rewrite_src_dst_mac(%arg3: !b48i {p4hir.annotations = {name = "smac"}, p4hir.dir = #undir, p4hir.param_name = "smac"}, %arg4: !b48i {p4hir.annotations = {name = "dmac"}, p4hir.dir = #undir, p4hir.param_name = "dmac"}) annotations {name = "egress.rewrite_src_dst_mac"} {
       %__local_egress_hdr_0 = p4hir.symbol_ref @egress::@__local_egress_hdr_0 : !p4hir.ref<!headers>
 // CHECK-NOT: p4hir.symbol_ref
@@ -219,6 +221,28 @@ module {
       %vrf_ref = p4hir.struct_field_ref %__local_egress_meta_0["vrf"] : <!ingress_metadata_t>
 // CHECK: %[[REF2:.*]] = bmv2ir.symbol_ref @egress1 : !p4hir.ref<!ingress_metadata_t>
 // CHECK: %{{.*}} = p4hir.struct_field_ref %[[REF2]]["vrf"] : <!ingress_metadata_t>
+      p4hir.return
+    }
+// CHECK-LABEL: p4hir.func action @fib_hit_nexthop
+    p4hir.func action @fib_hit_nexthop(%arg3: !b16i {p4hir.annotations = {name = "nexthop_index"}, p4hir.dir = #undir, p4hir.param_name = "nexthop_index_1"}) annotations {name = "ingress.fib_hit_nexthop"} {
+      %__local_ingress_meta_0 = p4hir.symbol_ref @egress::@__local_egress_meta_0 : !p4hir.ref<!ingress_metadata_t>
+      %vrf_field_ref = p4hir.struct_field_ref %__local_ingress_meta_0["nexthop_index"] : <!ingress_metadata_t>
+      p4hir.assign %arg3, %vrf_field_ref : <!b16i>
+      %__local_ingress_hdr_0 = p4hir.symbol_ref @egress::@__local_egress_hdr_0 : !p4hir.ref<!headers>
+      %ipv4_field_ref = p4hir.struct_field_ref %__local_ingress_hdr_0["ipv4"] : <!headers>
+      %ttl_field_ref = p4hir.struct_field_ref %ipv4_field_ref["ttl"] : <!ipv4_t>
+// CHECK:       %[[REF_V4:.*]] = bmv2ir.symbol_ref @egress0_ipv4 : !p4hir.ref<!ipv4_t>
+// CHECK-NEXT:  %{{.*}} = p4hir.struct_field_ref %[[REF_V4]]["ttl"] : <!ipv4_t>
+      %__local_ingress_hdr_0_0 = p4hir.symbol_ref @egress::@__local_egress_hdr_0 : !p4hir.ref<!headers>
+      %val = p4hir.read %__local_ingress_hdr_0_0 : <!headers>
+      %ipv4 = p4hir.struct_extract %val["ipv4"] : !headers
+      %ttl = p4hir.struct_extract %ipv4["ttl"] : !ipv4_t
+// CHECK:      %[[REF_V42:.*]] = bmv2ir.symbol_ref @egress0_ipv4 : !p4hir.ref<!ipv4_t>
+// CHECK:      %[[FREF_V42:.*]] = p4hir.read %[[REF_V42]] : <!ipv4_t>
+// CHECK:      %{{.*}} = p4hir.struct_extract %[[FREF_V42]]["ttl"] : !ipv4_t
+      %c-1_b8i = p4hir.const #int-1_b8i
+      %add = p4hir.binop(add, %ttl, %c-1_b8i) : !b8i
+      p4hir.assign %add, %ttl_field_ref : <!b8i>
       p4hir.return
     }
     p4hir.table @rewrite_mac_0 annotations {name = "egress.rewrite_mac"} {
@@ -243,6 +267,7 @@ module {
         p4hir.call @egress::@NoAction_2 () : () -> ()
       }
     }
+// CHECK-LABEL: p4hir.table @ipv4_fib_0
     p4hir.table @ipv4_fib_0 annotations {name = "ingress.ipv4_fib"} {
       p4hir.table_actions {
         p4hir.table_action @on_miss() {

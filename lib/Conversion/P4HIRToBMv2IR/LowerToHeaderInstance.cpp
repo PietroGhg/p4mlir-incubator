@@ -15,6 +15,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Support/WalkResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.h"
@@ -58,32 +59,70 @@ P4HIR::HeaderType isHeaderOrRefToHeader(mlir::Type ty) {
     return nullptr;
 }
 
-std::pair<SmallVector<P4HIR::StructFieldRefOp>, SmallVector<P4HIR::StructFieldRefOp>> findFieldRefs(
-    P4HIR::ControlLocalOp controlLocal, Location loc, P4HIR::StructType structTy) {
+LogicalResult handleFieldAccess(StringRef name, Operation *op, P4HIR::StructType structTy,
+                                SmallVector<Operation *> &fieldRefs,
+                                SmallVector<Operation *> &bitRefs) {
+    auto fieldTy = structTy.getFieldType(name);
+    if (isa<P4HIR::HeaderType>(fieldTy))
+        fieldRefs.push_back(op);
+    else if (isa<P4HIR::BitsType, P4HIR::VarBitsType>(fieldTy))
+        bitRefs.push_back(op);
+    else
+        return op->emitError("Unsupported FieldRefOp");
+
+    return success();
+};
+
+LogicalResult handleStructUse(Operation *user, P4HIR::StructType structTy,
+                              SmallVector<Operation *> &fieldRefs,
+                              SmallVector<Operation *> &bitRefs,
+                              SmallVector<Operation *> &eraseList) {
+    auto loc = user->getLoc();
+
+    if (auto fieldRefOp = dyn_cast<P4HIR::StructFieldRefOp>(user)) {
+        if (failed(handleFieldAccess(fieldRefOp.getFieldName(), fieldRefOp, structTy, fieldRefs,
+                                     bitRefs)))
+            return failure();
+    } else if (auto readOp = dyn_cast<P4HIR::ReadOp>(user)) {
+        for (auto readUser : readOp.getResult().getUsers()) {
+            auto extract = dyn_cast<P4HIR::StructExtractOp>(readUser);
+            if (!extract)
+                return emitError(loc, "Unsupported read use ")
+                       << readUser->getName().getIdentifier();
+            if (failed(handleFieldAccess(extract.getFieldName(), extract, structTy, fieldRefs,
+                                         bitRefs)))
+                return failure();
+        }
+        // Explicitly remove readOp to avoid unrealized_casts
+        eraseList.push_back(readOp);
+    } else {
+        return emitError(loc, "Unsupported struct use ") << user->getName().getIdentifier();
+    }
+    return success();
+}
+
+FailureOr<std::pair<SmallVector<Operation *>, SmallVector<Operation *>>> findFieldRefs(
+    P4HIR::ControlLocalOp controlLocal, Location loc, P4HIR::StructType structTy,
+    SmallVector<Operation *> &eraseList) {
     auto parent = controlLocal->getParentOfType<P4HIR::ControlOp>();
     auto moduleOp = controlLocal->getParentOfType<ModuleOp>();
     if (!parent || !moduleOp) return {};
-    SmallVector<P4HIR::StructFieldRefOp> fieldRefs;
-    SmallVector<P4HIR::StructFieldRefOp> bitRefs;
-    parent->walk([&](P4HIR::SymToValueOp symRef) {
+    SmallVector<Operation *> fieldRefs;
+    SmallVector<Operation *> bitRefs;
+    auto walkRes = parent->walk([&](P4HIR::SymToValueOp symRef) {
         auto decl = symRef.getDecl();
         auto op = mlir::SymbolTable::lookupSymbolIn(moduleOp, decl);
         if (op == controlLocal.getOperation()) {
             for (auto user : symRef->getUsers()) {
-                if (auto fieldRefOp = dyn_cast<P4HIR::StructFieldRefOp>(user)) {
-                    auto fieldTy = structTy.getFieldType(fieldRefOp.getFieldName());
-                    if (isa<P4HIR::HeaderType>(fieldTy))
-                        fieldRefs.push_back(fieldRefOp);
-                    else if (isa<P4HIR::BitsType, P4HIR::VarBitsType>(fieldTy))
-                        bitRefs.push_back(fieldRefOp);
-                    else
-                        llvm_unreachable("Unsupported FieldOp");
-                }
+                if (failed(handleStructUse(user, structTy, fieldRefs, bitRefs, eraseList)))
+                    return WalkResult::interrupt();
             }
         }
+        return WalkResult::advance();
     });
+    if (walkRes.wasInterrupted()) return failure();
 
-    return {fieldRefs, bitRefs};
+    return {{fieldRefs, bitRefs}};
 }
 
 // Adds instances from a StructType, splitting the struct to create separate instances for
@@ -93,50 +132,32 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
                                          PatternRewriter &rewriter) {
     auto ctx = rewriter.getContext();
     llvm::StringMap<BMv2IR::HeaderInstanceOp> instances;
-    SmallPtrSet<Operation *, 5> fieldRefs;  // FieldRefs accessessing header fields
-    SmallPtrSet<Operation *, 5> bitRefs;    // FieldRefs accessing bit fields
+    SmallVector<Operation *> fieldRefs;  // FieldRefs accessessing header fields
+    SmallVector<Operation *> bitRefs;    // FieldRefs accessing bit fields
+    SmallVector<Operation *> eraseList;
     P4HIR::ControlLocalOp controlLocal = nullptr;
 
-    auto handleFieldAccess = [&](StringRef name, Operation *op) -> LogicalResult {
-        auto fieldTy = structTy.getFieldType(name);
-        if (isa<P4HIR::HeaderType>(fieldTy))
-            fieldRefs.insert(op);
-        else if (isa<P4HIR::BitsType, P4HIR::VarBitsType>(fieldTy))
-            bitRefs.insert(op);
-        else
-            return emitError(loc, "Unsupported FieldRefOp");
-
-        return success();
-    };
     // Find the StructFieldRefOp that access the struct
     for (auto user : val.getUsers()) {
-        if (auto fieldRefOp = dyn_cast<P4HIR::StructFieldRefOp>(user)) {
-            if (failed(handleFieldAccess(fieldRefOp.getFieldName(), fieldRefOp.getOperation())))
-                return failure();
-        } else if (auto cLocal = dyn_cast<P4HIR::ControlLocalOp>(user)) {
+        if (auto cLocal = dyn_cast<P4HIR::ControlLocalOp>(user)) {
             if (controlLocal != nullptr) {
                 return emitError(loc, "Expected at most one ControlLocalOp for every argument");
             }
             controlLocal = cLocal;
-        } else if (auto readOp = dyn_cast<P4HIR::ReadOp>(user)) {
-            for (auto readUser : readOp.getResult().getUsers()) {
-                auto extract = dyn_cast<P4HIR::StructExtractOp>(readUser);
-                if (!extract)
-                    return emitError(loc, "Unsupported read use ")
-                           << readUser->getName().getIdentifier();
-                if (failed(handleFieldAccess(extract.getFieldName(), extract.getOperation())))
-                    return failure();
-            }
-        } else {
-            return emitError(loc, "Unsupported struct use ") << user->getName().getIdentifier();
+            continue;
         }
+        if (failed(handleStructUse(user, structTy, fieldRefs, bitRefs, eraseList)))
+            return failure();
     }
 
     // Add uses coming from ControlLocalOp
     if (controlLocal) {
-        const auto [fRefs, bRefs] = findFieldRefs(controlLocal, loc, structTy);
-        for (auto op : fRefs) fieldRefs.insert(op);
-        for (auto op : bRefs) bitRefs.insert(op);
+        const auto maybeRefs = findFieldRefs(controlLocal, loc, structTy, eraseList);
+        if (failed(maybeRefs))
+            return controlLocal->emitError("Error while processing control local op");
+        auto [fRefs, bRefs] = maybeRefs.value();
+        for (auto op : fRefs) fieldRefs.push_back(op);
+        for (auto op : bRefs) bitRefs.push_back(op);
     }
 
     // Add HeaderInstanceOps for StructFieldRefOps that reference header fields
@@ -167,7 +188,10 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
         rewriter.replaceOp(op, newOp->getResult(0));
     }
 
-    if (bitRefs.empty()) return success();
+    if (bitRefs.empty()) {
+        for (auto op : eraseList) rewriter.eraseOp(op);
+        return success();
+    }
 
     // Since the struct has bit fields, we create a new type dropping the header fields, and add a
     // header instance for it
@@ -213,6 +237,7 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
         rewriter.replaceOp(op, newOp->getResult(0));
     }
 
+    for (auto op : eraseList) rewriter.eraseOp(op);
     return success();
 }
 
