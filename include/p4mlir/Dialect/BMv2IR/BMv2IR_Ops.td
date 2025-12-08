@@ -205,6 +205,38 @@ def BMv2IR_AssignOp : BMv2IR_Op<"assign", [AllowedParserOp]> {
   }];
 }
 
+def BMv2IR_ConditionalOp : BMv2IR_Op<"conditional", [Symbol]> {
+  let summary = "BMv2 conditional op";
+  let description = [{
+    The bm2ir.conditional op models if/else blocks according to the
+    [BMv2 JSON spec](https://github.com/p4lang/behavioral-model/blob/main/docs/JSON_format.md#pipelines).
+    Conditionals have a SymbolName, and based on the boolean `condition`, jumps to either `thenRef`
+    or `elseRef`. `thenRef` and `elseRef` must refer to either tables, conditionals or action calls. 
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       BooleanType:$condition,
+                       OptionalAttr<SymbolRefAttr>:$thenRef,
+                       OptionalAttr<SymbolRefAttr>:$elseRef);
+
+  let assemblyFormat = [{
+    $condition (`then` $thenRef^)? (`else` $elseRef^)? attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def BMv2IR_TableOp : BMv2IR_Op<"table",
+   [Symbol, NoTerminator]> {
+  let arguments = (ins SymbolNameAttr:$sym_name,
+                       SymbolRefArrayAttr:$actions,
+                       BMv2IR_ActionTableArrayAttr:$next_tables
+  );
+  let regions = (region SizedRegion<1>:$body);
+
+  let assemblyFormat = [{
+    $sym_name `actions` $actions `next_tables` $next_tables $body attr-dict
+  }];
+}
+
 //===-------------------------------------------------------------------------------------------===//
 // BMv2 type-value fields
 // see https://github.com/p4lang/behavioral-model/blob/main/docs/JSON_format.md#the-type-value-object

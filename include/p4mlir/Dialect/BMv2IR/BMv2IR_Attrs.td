@@ -36,4 +36,21 @@ def BMv2IR_TransitionKind : IntEnum<"TransitionKind",
 
 def BMv2IR_TransitionKindAttr : EnumAttr<BMv2IR_Dialect, BMv2IR_TransitionKind, "transition_kind">;
 
+def BMv2IR_ActionTableAttr : BMv2IR_Attr<"ActionTable", "action-table"> {
+  let summary = "Action-Table pair";
+  let description = [{
+    This attribute contains a pair of symbol references, one for an action and one for the corresponding next table in the next_table section of the BMv2 description of Tables.
+  }];
+  
+  let parameters = (ins
+    "mlir::SymbolRefAttr":$action,
+    "mlir::SymbolRefAttr":$table
+  );
+  
+  let assemblyFormat = "`<` $action `:` $table `>`";
+}
+
+def BMv2IR_ActionTableArrayAttr : TypedArrayAttrBase<
+  BMv2IR_ActionTableAttr, "array of action-table pair attributes">;
+
 #endif // P4MLIR_DIALECT_BMv2IR_BMv2IR_ATTRS_TD

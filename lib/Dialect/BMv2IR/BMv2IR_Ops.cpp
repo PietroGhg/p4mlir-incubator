@@ -55,6 +55,11 @@ LogicalResult SymToValueOp::verifySymbolUses(SymbolTableCollection &symbolTable)
     return mlir::success();
 }
 
+LogicalResult ConditionalOp::verify() {
+  // TODO: check that the then and else symbols refer to either tables, action calls or conditionals
+  return success();
+}
+
 void SymToValueOp::getAsmResultNames(OpAsmSetValueNameFn setNameFn) {
     setNameFn(getResult(), getDecl().getLeafReference());
 }
