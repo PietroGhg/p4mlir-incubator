@@ -210,7 +210,7 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
     // Add a padding field if necessary
     unsigned padding = totalSize % 8;
     if (padding != 0) {
-        auto padTy = P4HIR::BitsType::get(ctx, padding, false);
+        auto padTy = P4HIR::BitsType::get(ctx, 8 - padding, false);
         P4HIR::FieldInfo padInfo{rewriter.getStringAttr("_padding"), padTy};
         bitFields.push_back(padInfo);
     }
