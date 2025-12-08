@@ -49,6 +49,7 @@ struct P4HIRToBMv2IRTypeConverter : public mlir::TypeConverter {
     P4HIRToBMv2IRTypeConverter() {
         addConversion([&](mlir::Type t) { return t; });
         addConversion([&](P4HIR::ReferenceType ty) { return convertType(ty.getObjectType()); });
+        addConversion([&](P4HIR::ValidBitType valBit) { return P4HIR::BitsType::get(valBit.getContext(), 1, false); });
         addConversion([&](P4HIR::StructLikeTypeInterface structTy) -> Type {
             SmallVector<BMv2IR::FieldInfo> newFields;
             for (auto field : structTy.getFields()) {
@@ -165,9 +166,11 @@ struct FieldRefConversionPattern : public OpConversionPattern<P4HIR::StructField
         auto resTy = getTypeConverter()->convertType(op.getResult().getType());
         auto instance = op.getInput().getDefiningOp<BMv2IR::SymToValueOp>();
         if (!instance) return failure();
+        auto oldName = op.getFieldName();
+        auto newName = oldName == P4HIR::HeaderType::validityBit ? BMv2IR::HeaderType::validBitFieldName : oldName;
         rewriter.replaceOpWithNewOp<BMv2IR::FieldOp>(
             op, resTy, SymbolRefAttr::get(ctx, instance.getDecl().getLeafReference()),
-            op.getFieldName());
+            newName);
         return success();
     }
 };

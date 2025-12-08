@@ -170,3 +170,30 @@ module {
     p4hir.transition to @prs_only_bit::@start
   }
 }
+
+// -----
+
+
+!b8i = !p4hir.bit<8>
+!validity_bit = !p4hir.validity.bit
+!bit_only = !p4hir.struct<"bit_only", bit: !b8i>
+!header_top = !p4hir.header<"header_top", skip: !b8i, __valid: !validity_bit>
+module {
+  bmv2ir.header_instance @prs_only_bit_top_0 : !p4hir.ref<!header_top>
+  bmv2ir.header_instance @prs_only_bit2 : !p4hir.ref<!header_top>
+  bmv2ir.header_instance @prs_only_bit1 : !p4hir.ref<!bit_only>
+  p4hir.parser @prs_valid(%arg0: !p4corelib.packet_in {p4hir.dir = #p4hir<dir undir>, p4hir.param_name = "p"}, %arg1: !p4hir.ref<!bit_only> {p4hir.dir = #p4hir<dir out>, p4hir.param_name = "headers"}, %arg2: !p4hir.ref<!header_top> {p4hir.dir = #p4hir<dir out>, p4hir.param_name = "headers"})() {
+    %prs_only_bit_top_0 = bmv2ir.symbol_ref @prs_only_bit_top_0 : !p4hir.ref<!header_top>
+    p4hir.state @start {
+      %prs_only_bit2 = bmv2ir.symbol_ref @prs_only_bit2 : !p4hir.ref<!header_top>
+      p4corelib.extract_header %prs_only_bit_top_0 : <!header_top> from %arg0 : !p4corelib.packet_in
+      %skip_field_ref = p4hir.struct_field_ref %prs_only_bit_top_0["__valid"] : <!header_top>
+// CHECK: bmv2ir.field @prs_only_bit_top_0["$valid$"] -> !b1i
+      p4hir.transition to @prs_valid::@accept
+    }
+    p4hir.state @accept {
+      p4hir.parser_accept
+    }
+    p4hir.transition to @prs_valid::@start
+  }
+}

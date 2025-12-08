@@ -16,7 +16,6 @@ class BMv2IR_Type<string name, string typeMnemonic, list<Trait> traits = []>
   let mnemonic = typeMnemonic;
 }
 
-// P4HeaderType represents a complete header type definition
 def BMv2IR_HeaderType : BMv2IR_Type<"Header", "header"> {
   let summary = "BMv2 header type";
   let description = [{
@@ -56,6 +55,7 @@ def BMv2IR_HeaderType : BMv2IR_Type<"Header", "header"> {
   let extraClassDeclaration = [{
     static unsigned computeMaxLength(llvm::ArrayRef<BMv2IR::FieldInfo>);
     static bool isAllowedFieldType(mlir::Type ty);
+    static constexpr llvm::StringRef validBitFieldName = "$valid$";
   }];
 }
 
