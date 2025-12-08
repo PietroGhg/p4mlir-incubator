@@ -97,23 +97,38 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
     SmallPtrSet<Operation *, 5> bitRefs;    // FieldRefs accessing bit fields
     P4HIR::ControlLocalOp controlLocal = nullptr;
 
+    auto handleFieldAccess = [&](StringRef name, Operation *op) -> LogicalResult {
+        auto fieldTy = structTy.getFieldType(name);
+        if (isa<P4HIR::HeaderType>(fieldTy))
+            fieldRefs.insert(op);
+        else if (isa<P4HIR::BitsType, P4HIR::VarBitsType>(fieldTy))
+            bitRefs.insert(op);
+        else
+            return emitError(loc, "Unsupported FieldRefOp");
+
+        return success();
+    };
     // Find the StructFieldRefOp that access the struct
     for (auto user : val.getUsers()) {
         if (auto fieldRefOp = dyn_cast<P4HIR::StructFieldRefOp>(user)) {
-            auto fieldTy = structTy.getFieldType(fieldRefOp.getFieldName());
-            if (isa<P4HIR::HeaderType>(fieldTy))
-                fieldRefs.insert(fieldRefOp);
-            else if (isa<P4HIR::BitsType, P4HIR::VarBitsType>(fieldTy))
-                bitRefs.insert(fieldRefOp);
-            else
-                return emitError(loc, "Unsupported FieldRefOp");
+            if (failed(handleFieldAccess(fieldRefOp.getFieldName(), fieldRefOp.getOperation())))
+                return failure();
         } else if (auto cLocal = dyn_cast<P4HIR::ControlLocalOp>(user)) {
             if (controlLocal != nullptr) {
                 return emitError(loc, "Expected at most one ControlLocalOp for every argument");
             }
             controlLocal = cLocal;
+        } else if (auto readOp = dyn_cast<P4HIR::ReadOp>(user)) {
+            for (auto readUser : readOp.getResult().getUsers()) {
+                auto extract = dyn_cast<P4HIR::StructExtractOp>(readUser);
+                if (!extract)
+                    return emitError(loc, "Unsupported read use ")
+                           << readUser->getName().getIdentifier();
+                if (failed(handleFieldAccess(extract.getFieldName(), extract.getOperation())))
+                    return failure();
+            }
         } else {
-            return emitError(loc, "Unsupported struct use") << user->getName().getIdentifier();
+            return emitError(loc, "Unsupported struct use ") << user->getName().getIdentifier();
         }
     }
 
@@ -126,24 +141,30 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
 
     // Add HeaderInstanceOps for StructFieldRefOps that reference header fields
     for (auto op : fieldRefs) {
-        auto fieldRefOp = cast<P4HIR::StructFieldRefOp>(op);
-        auto name = fieldRefOp.getFieldName();
+        StringRef name =
+            llvm::TypeSwitch<Operation *, StringRef>(op)
+                .Case([](P4HIR::StructFieldRefOp fieldRefOp) { return fieldRefOp.getFieldName(); })
+                .Case([](P4HIR::StructExtractOp extractOp) { return extractOp.getFieldName(); });
         auto instance = instances.find(name);
         BMv2IR::HeaderInstanceOp instanceOp = nullptr;
         PatternRewriter::InsertionGuard guard(rewriter);
+        auto fieldTy = structTy.getFieldType(name);
         if (instance != instances.end()) {
             instanceOp = instance->second;
         } else {
             rewriter.setInsertionPointToStart(moduleOp.getBody());
             instanceOp = rewriter.create<BMv2IR::HeaderInstanceOp>(
                 loc, rewriter.getStringAttr(parentName + "_" + name),
-                P4HIR::ReferenceType::get(structTy.getFieldType(name)));
+                P4HIR::ReferenceType::get(fieldTy));
             instances.insert({name, instanceOp});
         }
-        rewriter.setInsertionPointAfter(fieldRefOp);
-        rewriter.replaceOpWithNewOp<BMv2IR::SymToValueOp>(
-            fieldRefOp, instanceOp.getHeaderType(),
-            SymbolRefAttr::get(ctx, instanceOp.getSymName()));
+        rewriter.setInsertionPointAfter(op);
+        Operation *newOp =
+            rewriter.create<BMv2IR::SymToValueOp>(op->getLoc(), instanceOp.getHeaderType(),
+                                                  SymbolRefAttr::get(ctx, instanceOp.getSymName()));
+        if (isa<P4HIR::StructExtractOp>(op))
+            newOp = rewriter.create<P4HIR::ReadOp>(op->getLoc(), fieldTy, newOp->getResult(0));
+        rewriter.replaceOp(op, newOp->getResult(0));
     }
 
     if (bitRefs.empty()) return success();
@@ -177,13 +198,19 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
     auto newInstance = rewriter.create<BMv2IR::HeaderInstanceOp>(
         loc, rewriter.getStringAttr(parentName), P4HIR::ReferenceType::get(newTy));
     for (auto op : bitRefs) {
-        auto fieldRefOp = cast<P4HIR::StructFieldRefOp>(op);
-        rewriter.setInsertionPointAfter(fieldRefOp);
+        StringRef name =
+            llvm::TypeSwitch<Operation *, StringRef>(op)
+                .Case([](P4HIR::StructFieldRefOp fieldRefOp) { return fieldRefOp.getFieldName(); })
+                .Case([](P4HIR::StructExtractOp extractOp) { return extractOp.getFieldName(); });
+        rewriter.setInsertionPointAfter(op);
         auto symToVal = rewriter.create<BMv2IR::SymToValueOp>(
-            fieldRefOp.getLoc(), newInstance.getHeaderType(),
+            op->getLoc(), newInstance.getHeaderType(),
             SymbolRefAttr::get(ctx, newInstance.getSymName()));
-        rewriter.replaceOpWithNewOp<P4HIR::StructFieldRefOp>(fieldRefOp, symToVal,
-                                                             fieldRefOp.getFieldName());
+        Operation *newOp = rewriter.create<P4HIR::StructFieldRefOp>(op->getLoc(), symToVal, name);
+        if (isa<P4HIR::StructExtractOp>(op))
+            newOp = rewriter.create<P4HIR::ReadOp>(op->getLoc(), op->getResult(0).getType(),
+                                                   newOp->getResult(0));
+        rewriter.replaceOp(op, newOp->getResult(0));
     }
 
     return success();

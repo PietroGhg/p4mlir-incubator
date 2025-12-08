@@ -56,8 +56,9 @@ LogicalResult SymToValueOp::verifySymbolUses(SymbolTableCollection &symbolTable)
 }
 
 LogicalResult ConditionalOp::verify() {
-  // TODO: check that the then and else symbols refer to either tables, action calls or conditionals
-  return success();
+    // TODO: check that the then and else symbols refer to either tables, action calls or
+    // conditionals
+    return success();
 }
 
 void SymToValueOp::getAsmResultNames(OpAsmSetValueNameFn setNameFn) {

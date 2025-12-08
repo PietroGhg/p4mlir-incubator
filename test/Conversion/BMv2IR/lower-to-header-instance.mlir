@@ -243,6 +243,39 @@ module {
         p4hir.call @egress::@NoAction_2 () : () -> ()
       }
     }
+    p4hir.table @ipv4_fib_0 annotations {name = "ingress.ipv4_fib"} {
+      p4hir.table_actions {
+        p4hir.table_action @on_miss() {
+          p4hir.call @egress::@on_miss () : () -> ()
+        }
+        p4hir.table_action @rewrite_src_dst_mac(%arg3: !b48i {p4hir.annotations = {name = "smac"}, p4hir.param_name = "smac"}, %arg4: !b48i {p4hir.annotations = {name = "dmac"}, p4hir.param_name = "dmac"}) {
+          p4hir.call @egress::@rewrite_src_dst_mac (%arg3, %arg4) : (!b48i, !b48i) -> ()
+        }
+        p4hir.table_action @NoAction_2() annotations {defaultonly} {
+          p4hir.call @egress::@NoAction_2 () : () -> ()
+        }
+      }
+      p4hir.table_key {
+        %val = p4hir.read %arg1 : <!ingress_metadata_t>
+        %vrf = p4hir.struct_extract %val["vrf"] : !ingress_metadata_t
+        p4hir.match_key #exact %vrf : !b12i annotations {name = "meta.ingress_metadata.vrf"}
+// CHECK:        %[[REF3:.*]] = bmv2ir.symbol_ref @egress1 : !p4hir.ref<!ingress_metadata_t>
+// CHECK:        %[[FREF:.*]] = p4hir.struct_field_ref %[[REF3]]["vrf"] : <!ingress_metadata_t>
+// CHECK:        %[[VAL:.*]] = p4hir.read %[[FREF]] : <!b12i>
+// CHECK:        p4hir.match_key #exact %[[VAL]] : !b12i annotations {name = "meta.ingress_metadata.vrf"}
+        %val_0 = p4hir.read %arg0 : <!headers>
+        %ipv4 = p4hir.struct_extract %val_0["ipv4"] : !headers
+// CHECK:        %[[REF4:.*]] = bmv2ir.symbol_ref @egress0_ipv4 : !p4hir.ref<!ipv4_t>
+// CHECK:        %[[VAL2:.*]] = p4hir.read %[[REF4]] : <!ipv4_t>
+// CHECK:        %{{.*}} = p4hir.struct_extract %[[VAL2]]["dstAddr"] : !ipv4_t
+        %dstAddr = p4hir.struct_extract %ipv4["dstAddr"] : !ipv4_t
+        p4hir.match_key #exact %dstAddr : !b32i annotations {name = "hdr.ipv4.dstAddr"}
+      }
+      %size = p4hir.table_size #int32768_infint
+      p4hir.table_default_action {
+        p4hir.call @egress::@NoAction_2 () : () -> ()
+      }
+    }
     p4hir.control_apply {
       %rewrite_mac_0_apply_result = p4hir.table_apply @egress::@rewrite_mac_0 : !rewrite_mac_0
     }
