@@ -63,12 +63,16 @@ LogicalResult handleFieldAccess(StringRef name, Operation *op, P4HIR::StructType
                                 SmallVector<Operation *> &fieldRefs,
                                 SmallVector<Operation *> &bitRefs) {
     auto fieldTy = structTy.getFieldType(name);
-    if (isa<P4HIR::HeaderType>(fieldTy))
-        fieldRefs.push_back(op);
-    else if (isa<P4HIR::BitsType, P4HIR::VarBitsType>(fieldTy))
-        bitRefs.push_back(op);
-    else
-        return op->emitError("Unsupported FieldRefOp");
+    return llvm::TypeSwitch<Type, LogicalResult>(fieldTy)
+        .Case([&](P4HIR::HeaderType) {
+            fieldRefs.push_back(op);
+            return success();
+        })
+        .Case<P4HIR::BitsType, P4HIR::VarBitsType>([&](mlir::Type) {
+            bitRefs.push_back(op);
+            return success();
+        })
+        .Default([&](Type) { return op->emitError("Unsupported field access"); });
 
     return success();
 };
@@ -77,53 +81,53 @@ LogicalResult handleStructUse(OpOperand &use, P4HIR::StructType structTy,
                               SmallVector<Operation *> &fieldRefs,
                               SmallVector<Operation *> &bitRefs,
                               SmallVector<Operation *> &eraseList) {
-    auto *user = use.getOwner();
-    auto loc = user->getLoc();
-
-    if (auto fieldRefOp = dyn_cast<P4HIR::StructFieldRefOp>(user)) {
-        if (failed(handleFieldAccess(fieldRefOp.getFieldName(), fieldRefOp, structTy, fieldRefs,
-                                     bitRefs)))
-            return failure();
-    } else if (auto readOp = dyn_cast<P4HIR::ReadOp>(user)) {
-        for (auto readUser : readOp.getResult().getUsers()) {
-            auto extract = dyn_cast<P4HIR::StructExtractOp>(readUser);
-            if (!extract)
-                return emitError(loc, "Unsupported read use ")
-                       << readUser->getName().getIdentifier();
-            if (failed(handleFieldAccess(extract.getFieldName(), extract, structTy, fieldRefs,
-                                         bitRefs)))
-                return failure();
-        }
-        // Explicitly remove readOp to avoid unrealized_casts
-        eraseList.push_back(readOp);
-    } else if (auto tableApplyOp = dyn_cast<P4HIR::TableApplyOp>(user)) {
-        // Table apply ops "call" table keys and pass control args to the table as arguments, but we
-        // want the key argument to become the same header instance as the control argument.
-        auto argIndex = use.getOperandNumber();
-        auto moduleOp = user->getParentOfType<ModuleOp>();
-        if (!moduleOp) return user->emitError("No parent ModuleOp");
-        auto tableOp = dyn_cast<P4HIR::TableOp>(
-            mlir::SymbolTable::lookupSymbolIn(moduleOp, tableApplyOp.getTable()));
-        if (!tableOp) return user->emitError("No table");
-        P4HIR::TableKeyOp tableKey;
-        tableOp->walk([&](P4HIR::TableKeyOp keyOp) {
-            assert(!tableKey && "Multiple table keys?");
-            tableKey = keyOp;
-        });
-        if (!tableKey) return user->emitError("No table key");
-        auto blockArg = tableKey.getBody().getArgument(argIndex);
-        for (auto &use : blockArg.getUses()) {
-            if (failed(handleStructUse(use, structTy, fieldRefs, bitRefs, eraseList)))
-                return tableKey->emitError("Error processing block argument at index ") << argIndex;
-        }
-    } else {
-        return emitError(loc, "Unsupported struct use ") << user->getName().getIdentifier();
-    }
+    return llvm::TypeSwitch<Operation *, LogicalResult>(use.getOwner())
+        .Case([&](P4HIR::StructFieldRefOp fieldRefOp) {
+            return handleFieldAccess(fieldRefOp.getFieldName(), fieldRefOp, structTy, fieldRefs,
+                                     bitRefs);
+        })
+        .Case([&](P4HIR::ReadOp readOp) -> LogicalResult {
+            for (auto readUser : readOp.getResult().getUsers()) {
+                auto extract = dyn_cast<P4HIR::StructExtractOp>(readUser);
+                if (!extract) return readUser->emitError("Unsupported read use");
+                if (failed(handleFieldAccess(extract.getFieldName(), extract, structTy, fieldRefs,
+                                             bitRefs)))
+                    return failure();
+            }
+            // Explicitly remove readOp to avoid unrealized_casts
+            eraseList.push_back(readOp);
+            return success();
+        })
+        .Case([&](P4HIR::TableApplyOp tableApplyOp) -> LogicalResult {
+            // Table apply ops "call" table keys and pass control args to the table as arguments,
+            // but we want the key argument to become the same header instance as the control
+            // argument.
+            auto argIndex = use.getOperandNumber();
+            auto moduleOp = tableApplyOp->getParentOfType<ModuleOp>();
+            if (!moduleOp) return tableApplyOp->emitError("No parent ModuleOp");
+            auto tableOp = dyn_cast<P4HIR::TableOp>(
+                mlir::SymbolTable::lookupSymbolIn(moduleOp, tableApplyOp.getTable()));
+            if (!tableOp) return tableApplyOp->emitError("No table");
+            P4HIR::TableKeyOp tableKey;
+            tableOp->walk([&](P4HIR::TableKeyOp keyOp) {
+                assert(!tableKey && "Multiple table keys?");
+                tableKey = keyOp;
+            });
+            if (!tableKey) return tableApplyOp->emitError("No table key");
+            auto blockArg = tableKey.getBody().getArgument(argIndex);
+            for (auto &use : blockArg.getUses()) {
+                if (failed(handleStructUse(use, structTy, fieldRefs, bitRefs, eraseList)))
+                    return tableKey->emitError("Error processing block argument at index ")
+                           << argIndex;
+            }
+            return success();
+        })
+        .Default([](Operation *op) { return op->emitError("Unsupported struct use"); });
     return success();
 }
 
 FailureOr<std::pair<SmallVector<Operation *>, SmallVector<Operation *>>> findFieldRefs(
-    P4HIR::ControlLocalOp controlLocal, Location loc, P4HIR::StructType structTy,
+    P4HIR::ControlLocalOp controlLocal, P4HIR::StructType structTy,
     SmallVector<Operation *> &eraseList) {
     auto parent = controlLocal->getParentOfType<P4HIR::ControlOp>();
     auto moduleOp = controlLocal->getParentOfType<ModuleOp>();
@@ -173,7 +177,7 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
 
     // Add uses coming from ControlLocalOp
     if (controlLocal) {
-        const auto maybeRefs = findFieldRefs(controlLocal, loc, structTy, eraseList);
+        const auto maybeRefs = findFieldRefs(controlLocal, structTy, eraseList);
         if (failed(maybeRefs))
             return controlLocal->emitError("Error while processing control local op");
         auto [fRefs, bRefs] = maybeRefs.value();
