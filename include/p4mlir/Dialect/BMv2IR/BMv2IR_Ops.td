@@ -251,10 +251,9 @@ def BMv2IR_TableOp : BMv2IR_Op<"table",
                        SymbolRefArrayAttr:$actions,
                        BMv2IR_ActionTableArrayAttr:$next_tables
   );
-  let regions = (region SizedRegion<1>:$body);
 
   let assemblyFormat = [{
-    $sym_name `actions` $actions `next_tables` $next_tables $body attr-dict
+    $sym_name `actions` $actions `next_tables` $next_tables attr-dict
   }];
 }
 

@@ -44,10 +44,10 @@ def BMv2IR_ActionTableAttr : BMv2IR_Attr<"ActionTable", "action-table"> {
   
   let parameters = (ins
     "mlir::SymbolRefAttr":$action,
-    "mlir::SymbolRefAttr":$table
+    OptionalParameter<"mlir::SymbolRefAttr">:$table
   );
   
-  let assemblyFormat = "`<` $action `:` $table `>`";
+  let assemblyFormat = "`<` $action (`:` $table^)? `>`";
 }
 
 def BMv2IR_ActionTableArrayAttr : TypedArrayAttrBase<

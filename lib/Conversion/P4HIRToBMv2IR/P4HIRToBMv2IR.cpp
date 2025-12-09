@@ -1,12 +1,20 @@
+#include <optional>
+
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/AllocatorBase.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LogicalResult.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
@@ -377,6 +385,178 @@ struct ParserOpConversionPattern : public OpConversionPattern<P4HIR::ParserOp> {
     }
 };
 
+struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
+    using OpConversionPattern<P4HIR::TableOp>::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(P4HIR::TableOp op, OpAdaptor operands,
+                                  ConversionPatternRewriter &rewriter) const override {
+        // Build the list of actions.
+        // We assume that table_actions only contain the call to the actual control action
+        SmallVector<P4HIR::TableActionOp> tableActions;
+        op.walk([&](P4HIR::TableActionOp actionOp) { tableActions.push_back(actionOp); });
+        SmallVector<Attribute> actionCallees;
+        for (auto actionOp : tableActions) {
+            auto maybeActionRef = getAction(actionOp);
+            if (failed(maybeActionRef)) return actionOp.emitError("Unexpected table_action");
+            actionCallees.push_back(maybeActionRef.value());
+        }
+
+        auto maybeActionTables = getActionTablePairs(op, actionCallees);
+        if (failed(maybeActionTables)) return op.emitError("Error processing next_tables node");
+
+        auto newName = rewriter.getStringAttr(op.getSymName() + "_foo");  // TODO: use the same name
+        rewriter.create<BMv2IR::TableOp>(op.getLoc(), newName, rewriter.getArrayAttr(actionCallees),
+                                         rewriter.getArrayAttr(maybeActionTables.value()));
+        return success();
+    }
+
+ private:
+    static FailureOr<SymbolRefAttr> getAction(P4HIR::TableActionOp tableActionOp) {
+        Region &region = tableActionOp->getRegion(0);
+        if (!region.hasOneBlock()) return failure();
+
+        Block &block = region.front();
+
+        if (!llvm::hasSingleElement(block)) return failure();
+
+        Operation &op = block.front();
+
+        auto callOp = dyn_cast<P4HIR::CallOp>(&op);
+        if (!callOp) return failure();
+
+        if (auto callee = callOp.getCallee()) return callee;
+
+        return failure();
+    }
+
+    // In BMv2, control flow between table_apply operations in control_apply blocks is expressed
+    // by the next_table entries in the table node. So in order to fill the next_table node we need
+    // to:
+    // * Retrieve the table_apply operation corresponding to tableOp (TODO: can there be more than
+    // one?)
+    // * Look at the next operation after the table_apply:
+    //   - If it's another table_apply, then the next_table node contains all entries that point to
+    //   the next table (one for every action)
+    //   - If it's a check on hit/miss, we need to add __HIT__ and __MISS__ entries to the table
+    //   - If it's a switch, we need to add an entry for every action, with the first table in the
+    //   case block as next table
+    static FailureOr<SmallVector<Attribute>> getActionTablePairs(P4HIR::TableOp tableOp,
+                                                                 ArrayRef<Attribute> actions) {
+        llvm::errs() << "[ptrdbg] check: " << tableOp.getSymName() << "\n";
+        auto controlParent = tableOp->getParentOfType<P4HIR::ControlOp>();
+        if (!controlParent) return tableOp.emitError("No control parent");
+        // TODO: add helper
+        P4HIR::ControlApplyOp controlApply = nullptr;
+        controlParent.walk([&](P4HIR::ControlApplyOp cApply) {
+            assert(!controlApply && "Multiple control apply");
+            controlApply = cApply;
+        });
+        if (!controlApply) return tableOp.emitError("No control_apply");
+        // TODO: add helper
+        P4HIR::TableApplyOp applyOp = nullptr;
+        controlApply.walk([&](P4HIR::TableApplyOp applOp) {
+            if (applOp.getTable().getLeafReference() == tableOp.getSymName()) {
+                assert(!applyOp && "Multiple table_apply");
+                applyOp = applOp;
+            }
+        });
+        Operation *nextOp = applyOp->getNextNode();
+        if (!nextOp) return tableOp.emitError("Expected next operation");
+
+        return llvm::TypeSwitch<Operation *, FailureOr<SmallVector<Attribute>>>(nextOp)
+            .Case([&](P4HIR::YieldOp) {
+                // This is the final table, return `null` as next table for every action
+                // FIXME: we need to check if we are yielding from the main control_apply region or
+                // from another block
+                SmallVector<Attribute> result;
+                for (auto attr : actions) {
+                    auto action = cast<SymbolRefAttr>(attr);
+                    result.push_back(
+                        BMv2IR::ActionTableAttr::get(tableOp.getContext(), action, nullptr));
+                }
+                return result;
+            })
+            .Case([&](P4HIR::TableApplyOp nextApplyOp) {
+                SmallVector<Attribute> result;
+                auto nextTable = nextApplyOp.getTable();
+                for (auto attr : actions) {
+                    auto action = cast<SymbolRefAttr>(attr);
+                    result.push_back(
+                        BMv2IR::ActionTableAttr::get(nextApplyOp.getContext(), action, nextTable));
+                }
+                return result;
+            })
+            .Case([&](P4HIR::StructExtractOp extractOp) -> FailureOr<SmallVector<Attribute>> {
+                llvm::errs() << "[ptrdbg] in extract\n";
+                if (extractOp.getFieldName() != "action_run")
+                    return extractOp.emitError("Only action_run field supported");
+                auto switchOp = dyn_cast_or_null<P4HIR::SwitchOp>(extractOp->getNextNode());
+                if (!switchOp) extractOp.emitError("Expected SwitchOp after ExtractOp");
+                return getNextTablesFromSwitch(switchOp, actions);
+            })
+            .Default([](Operation *op) -> FailureOr<SmallVector<Attribute>> {
+                return op->emitError("Unsupported operation");
+            });
+    }
+
+    static FailureOr<SmallVector<Attribute>> getNextTablesFromSwitch(P4HIR::SwitchOp switchOp,
+                                                                     ArrayRef<Attribute> actions) {
+        SmallVector<Attribute> result;
+        SmallPtrSet<Attribute, 5> processedActions;
+        for (auto caseOp : switchOp.cases()) {
+            if (caseOp.getKind() == P4HIR::CaseOpKind::Equal) {
+                // This assumes that the enum field and the corresponding action have the same
+                auto vals = caseOp.getValue();
+                assert(vals.size() == 1 && "More than value in equal case");
+                auto enumField = dyn_cast<P4HIR::EnumFieldAttr>(vals[0]);
+                if (!enumField) return caseOp.emitError("Expected EnumFieldAttr");
+                auto enumVal = enumField.getField().getValue();
+                auto actionIt = llvm::find_if(actions, [&](Attribute a) {
+                    return cast<SymbolRefAttr>(a).getLeafReference() == enumVal;
+                });
+                if (actionIt == actions.end())
+                    return caseOp.emitError("Enum field doesn't match any action");
+                auto actionSymRefAttr = cast<SymbolRefAttr>(*actionIt);
+                auto nextTable =
+                    dyn_cast<P4HIR::TableApplyOp>(caseOp.getCaseRegion().front().front());
+                if (!nextTable)
+                    return caseOp.emitError("Expected table apply as first operation of the block");
+                result.push_back(BMv2IR::ActionTableAttr::get(
+                    switchOp.getContext(), actionSymRefAttr, nextTable.getTable()));
+                processedActions.insert(*actionIt);
+            }
+        }
+        // For the ops that aren't covered by explicit cases, we look at the default case. If the
+        // default case just yields, the next transition is the first table_apply after the switch,
+        // otherwise it's the first table_apply in the case region.
+        auto defaultCase = switchOp.getDefaultCase();
+        if (!defaultCase) return switchOp.emitError("Expected default case");
+        auto &firstCaseOp = defaultCase.getCaseRegion().front().front();
+        auto maybeNextTable =
+            llvm::TypeSwitch<Operation *, FailureOr<P4HIR::TableApplyOp>>(&firstCaseOp)
+                .Case([](P4HIR::TableApplyOp tableApplyOp) { return tableApplyOp; })
+                .Case([&](P4HIR::YieldOp YieldOp) -> FailureOr<P4HIR::TableApplyOp> {
+                    auto nextOp = switchOp->getNextNode();
+                    if (isa<P4HIR::YieldOp>(nextOp)) return P4HIR::TableApplyOp();
+                    if (auto tableApply = dyn_cast<P4HIR::TableApplyOp>(nextOp)) return tableApply;
+                    return failure();
+                })
+                .Default([](Operation *op) -> FailureOr<P4HIR::TableApplyOp> {
+                    return op->emitError("Unexpected op");
+                });
+
+        if (failed(maybeNextTable)) return switchOp.emitError("Error processing default case");
+        auto nextTable = maybeNextTable.value() ? maybeNextTable.value().getTable() : nullptr;
+        for (auto a : actions) {
+            if (processedActions.contains(a)) continue;
+            auto action = cast<SymbolRefAttr>(a);
+            result.push_back(
+                BMv2IR::ActionTableAttr::get(switchOp.getContext(), action, nextTable));
+        }
+        return result;
+    }
+};
+
 struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv2IRPass> {
     void runOnOperation() override {
         MLIRContext &context = getContext();
@@ -384,12 +564,11 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         ConversionTarget target(context);
         RewritePatternSet patterns(&context);
         P4HIRToBMv2IRTypeConverter converter;
-        patterns
-            .add<HeaderInstanceOpConversionPattern, ParserOpConversionPattern,
-                 ParserStateOpConversionPattern, ExtractOpConversionPattern,
-                 AssignOpToAssignHeaderPattern, AssignOpPattern, ReadOpConversionPattern,
-                 FieldRefConversionPattern, SymToValConversionPattern, CompareValidityToD2BPattern>(
-                converter, &context);
+        patterns.add<HeaderInstanceOpConversionPattern, ParserOpConversionPattern,
+                     ParserStateOpConversionPattern, ExtractOpConversionPattern,
+                     AssignOpToAssignHeaderPattern, AssignOpPattern, ReadOpConversionPattern,
+                     FieldRefConversionPattern, SymToValConversionPattern,
+                     CompareValidityToD2BPattern, TableOpConversionPattern>(converter, &context);
 
         target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
@@ -411,6 +590,7 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         target.addIllegalOp<P4HIR::StructFieldRefOp>();
         target.addIllegalOp<P4HIR::ReadOp>();
         target.addIllegalOp<P4HIR::CmpOp>();
+        target.addIllegalOp<P4HIR::TableOp>();
 
         if (failed(applyPartialConversion(module, target, std::move(patterns))))
             signalPassFailure();
