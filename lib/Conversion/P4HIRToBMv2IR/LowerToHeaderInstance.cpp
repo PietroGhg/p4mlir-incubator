@@ -73,10 +73,11 @@ LogicalResult handleFieldAccess(StringRef name, Operation *op, P4HIR::StructType
     return success();
 };
 
-LogicalResult handleStructUse(Operation *user, P4HIR::StructType structTy,
+LogicalResult handleStructUse(OpOperand &use, P4HIR::StructType structTy,
                               SmallVector<Operation *> &fieldRefs,
                               SmallVector<Operation *> &bitRefs,
                               SmallVector<Operation *> &eraseList) {
+    auto *user = use.getOwner();
     auto loc = user->getLoc();
 
     if (auto fieldRefOp = dyn_cast<P4HIR::StructFieldRefOp>(user)) {
@@ -95,6 +96,26 @@ LogicalResult handleStructUse(Operation *user, P4HIR::StructType structTy,
         }
         // Explicitly remove readOp to avoid unrealized_casts
         eraseList.push_back(readOp);
+    } else if (auto tableApplyOp = dyn_cast<P4HIR::TableApplyOp>(user)) {
+        // Table apply ops "call" table keys and pass control args to the table as arguments, but we
+        // want the key argument to become the same header instance as the control argument.
+        auto argIndex = use.getOperandNumber();
+        auto moduleOp = user->getParentOfType<ModuleOp>();
+        if (!moduleOp) return user->emitError("No parent ModuleOp");
+        auto tableOp = dyn_cast<P4HIR::TableOp>(
+            mlir::SymbolTable::lookupSymbolIn(moduleOp, tableApplyOp.getTable()));
+        if (!tableOp) return user->emitError("No table");
+        P4HIR::TableKeyOp tableKey;
+        tableOp->walk([&](P4HIR::TableKeyOp keyOp) {
+            assert(!tableKey && "Multiple table keys?");
+            tableKey = keyOp;
+        });
+        if (!tableKey) return user->emitError("No table key");
+        auto blockArg = tableKey.getBody().getArgument(argIndex);
+        for (auto &use : blockArg.getUses()) {
+            if (failed(handleStructUse(use, structTy, fieldRefs, bitRefs, eraseList)))
+                return tableKey->emitError("Error processing block argument at index ") << argIndex;
+        }
     } else {
         return emitError(loc, "Unsupported struct use ") << user->getName().getIdentifier();
     }
@@ -113,8 +134,8 @@ FailureOr<std::pair<SmallVector<Operation *>, SmallVector<Operation *>>> findFie
         auto decl = symRef.getDecl();
         auto op = mlir::SymbolTable::lookupSymbolIn(moduleOp, decl);
         if (op == controlLocal.getOperation()) {
-            for (auto user : symRef->getUsers()) {
-                if (failed(handleStructUse(user, structTy, fieldRefs, bitRefs, eraseList)))
+            for (auto &use : symRef->getUses()) {
+                if (failed(handleStructUse(use, structTy, fieldRefs, bitRefs, eraseList)))
                     return WalkResult::interrupt();
             }
         }
@@ -138,7 +159,8 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
     P4HIR::ControlLocalOp controlLocal = nullptr;
 
     // Find the StructFieldRefOp that access the struct
-    for (auto user : val.getUsers()) {
+    for (auto &use : val.getUses()) {
+        auto user = use.getOwner();
         if (auto cLocal = dyn_cast<P4HIR::ControlLocalOp>(user)) {
             if (controlLocal != nullptr) {
                 return emitError(loc, "Expected at most one ControlLocalOp for every argument");
@@ -146,8 +168,7 @@ LogicalResult splitStructAndAddInstances(Value val, P4HIR::StructType structTy, 
             controlLocal = cLocal;
             continue;
         }
-        if (failed(handleStructUse(user, structTy, fieldRefs, bitRefs, eraseList)))
-            return failure();
+        if (failed(handleStructUse(use, structTy, fieldRefs, bitRefs, eraseList))) return failure();
     }
 
     // Add uses coming from ControlLocalOp

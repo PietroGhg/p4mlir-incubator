@@ -257,8 +257,8 @@ module {
           p4hir.call @egress::@NoAction_2 () : () -> ()
         }
       }
-      p4hir.table_key {
-        %nexthop_index_ref = p4hir.struct_field_ref %arg1["nexthop_index"] : <!ingress_metadata_t>
+      p4hir.table_key(%arg3 : !p4hir.ref<!ingress_metadata_t>) {
+        %nexthop_index_ref = p4hir.struct_field_ref %arg3["nexthop_index"] : <!ingress_metadata_t>
         %nexthop_index = p4hir.read %nexthop_index_ref : <!b16i>
         p4hir.match_key #exact %nexthop_index : !b16i annotations {name = "meta.ingress_metadata.nexthop_index"}
       }
@@ -280,15 +280,15 @@ module {
           p4hir.call @egress::@NoAction_2 () : () -> ()
         }
       }
-      p4hir.table_key {
-        %val = p4hir.read %arg1 : <!ingress_metadata_t>
+      p4hir.table_key(%arg3 : !p4hir.ref<!headers>, %arg4 : !p4hir.ref<!ingress_metadata_t>) {
+        %val = p4hir.read %arg4 : <!ingress_metadata_t>
         %vrf = p4hir.struct_extract %val["vrf"] : !ingress_metadata_t
         p4hir.match_key #exact %vrf : !b12i annotations {name = "meta.ingress_metadata.vrf"}
 // CHECK:        %[[REF3:.*]] = bmv2ir.symbol_ref @egress1 : !p4hir.ref<!ingress_metadata_t>
 // CHECK:        %[[FREF:.*]] = p4hir.struct_field_ref %[[REF3]]["vrf"] : <!ingress_metadata_t>
 // CHECK:        %[[VAL:.*]] = p4hir.read %[[FREF]] : <!b12i>
 // CHECK:        p4hir.match_key #exact %[[VAL]] : !b12i annotations {name = "meta.ingress_metadata.vrf"}
-        %val_0 = p4hir.read %arg0 : <!headers>
+        %val_0 = p4hir.read %arg3 : <!headers>
         %ipv4 = p4hir.struct_extract %val_0["ipv4"] : !headers
 // CHECK:        %[[REF4:.*]] = bmv2ir.symbol_ref @egress0_ipv4 : !p4hir.ref<!ipv4_t>
 // CHECK:        %[[VAL2:.*]] = p4hir.read %[[REF4]] : <!ipv4_t>
@@ -302,7 +302,8 @@ module {
       }
     }
     p4hir.control_apply {
-      %rewrite_mac_0_apply_result = p4hir.table_apply @egress::@rewrite_mac_0 : !rewrite_mac_0
+      %rewrite_mac_0_apply_result = p4hir.table_apply @egress::@rewrite_mac_0 with key(%arg1) : (!p4hir.ref<!ingress_metadata_t>) -> !rewrite_mac_0
+      %res2 = p4hir.table_apply @egress::@ipv4_fib_0 with key(%arg0, %arg1) : (!p4hir.ref<!headers>, !p4hir.ref<!ingress_metadata_t>) -> !rewrite_mac_0
     }
   }
 }

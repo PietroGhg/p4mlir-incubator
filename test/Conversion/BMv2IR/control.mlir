@@ -124,7 +124,7 @@ module {
           p4hir.call @ingress::@NoAction_3 () : () -> ()
         }
       }
-      p4hir.table_key {
+      p4hir.table_key(%arg3: !p4hir.ref<!ingress_metadata_t1>) {
         %ingress1 = bmv2ir.symbol_ref @ingress1 : !p4hir.ref<!ingress_metadata_t>
         %bd_field_ref = p4hir.struct_field_ref %ingress1["bd"] : <!ingress_metadata_t>
         %val = p4hir.read %bd_field_ref : <!b16i>
@@ -147,7 +147,7 @@ module {
           p4hir.call @ingress::@NoAction_4 () : () -> ()
         }
       }
-      p4hir.table_key {
+      p4hir.table_key(%arg3: !p4hir.ref<!ingress_metadata_t1>, %arg4: !p4hir.ref<!headers>) {
         %ingress1 = bmv2ir.symbol_ref @ingress1 : !p4hir.ref<!ingress_metadata_t>
         %vrf_field_ref = p4hir.struct_field_ref %ingress1["vrf"] : <!ingress_metadata_t>
         %val = p4hir.read %vrf_field_ref : <!b12i>
@@ -174,7 +174,7 @@ module {
           p4hir.call @ingress::@NoAction_5 () : () -> ()
         }
       }
-      p4hir.table_key {
+      p4hir.table_key(%arg3: !p4hir.ref<!ingress_metadata_t1>, %arg4: !p4hir.ref<!headers>) {
         %ingress1 = bmv2ir.symbol_ref @ingress1 : !p4hir.ref<!ingress_metadata_t>
         %vrf_field_ref = p4hir.struct_field_ref %ingress1["vrf"] : <!ingress_metadata_t>
         %val = p4hir.read %vrf_field_ref : <!b12i>
@@ -201,7 +201,7 @@ module {
           p4hir.call @ingress::@NoAction_6 () : () -> ()
         }
       }
-      p4hir.table_key {
+      p4hir.table_key(%arg3: !p4hir.ref<!ingress_metadata_t1>) {
         %ingress1 = bmv2ir.symbol_ref @ingress1 : !p4hir.ref<!ingress_metadata_t>
         %nexthop_index_field_ref = p4hir.struct_field_ref %ingress1["nexthop_index"] : <!ingress_metadata_t>
         %val = p4hir.read %nexthop_index_field_ref : <!b16i>
@@ -221,7 +221,7 @@ module {
           p4hir.call @ingress::@NoAction_7 () : () -> ()
         }
       }
-      p4hir.table_key {
+      p4hir.table_key(%arg3: !p4hir.ref<!standard_metadata_t1>) {
         %ingress2 = bmv2ir.symbol_ref @ingress2 : !p4hir.ref<!standard_metadata_t>
         %ingress_port_field_ref = p4hir.struct_field_ref %ingress2["ingress_port"] : <!standard_metadata_t>
         %val = p4hir.read %ingress_port_field_ref : <!b9i>
@@ -241,13 +241,13 @@ module {
 // CHECK: %[[D2B:.*]] = bmv2ir.d2b %[[VALID_F]] : !b1i
 // CHECK: p4hir.if %[[D2B]] {
       p4hir.if %eq {
-        %port_mapping_0_apply_result = p4hir.table_apply @ingress::@port_mapping_0 : !port_mapping_0
-        %bd_1_apply_result = p4hir.table_apply @ingress::@bd_1 : !bd_1
-        %ipv4_fib_0_apply_result = p4hir.table_apply @ingress::@ipv4_fib_0 : !ipv4_fib_0
+        %port_mapping_0_apply_result = p4hir.table_apply @ingress::@port_mapping_0 with key(%arg2) : (!p4hir.ref<!standard_metadata_t1>) -> !port_mapping_0
+        %bd_1_apply_result = p4hir.table_apply @ingress::@bd_1 with key(%arg1) : (!p4hir.ref<!ingress_metadata_t1>) -> !bd_1
+        %ipv4_fib_0_apply_result = p4hir.table_apply @ingress::@ipv4_fib_0 with key(%arg1, %arg0) : (!p4hir.ref<!ingress_metadata_t1>, !p4hir.ref<!headers>) -> !ipv4_fib_0
         %action_run = p4hir.struct_extract %ipv4_fib_0_apply_result["action_run"] : !ipv4_fib_0
         p4hir.switch (%action_run : !anon2) {
           p4hir.case(equal, [#anon_on_miss_2]) {
-            %ipv4_fib_lpm_0_apply_result = p4hir.table_apply @ingress::@ipv4_fib_lpm_0 : !ipv4_fib_lpm_0
+            %ipv4_fib_lpm_0_apply_result = p4hir.table_apply @ingress::@ipv4_fib_lpm_0 with key(%arg1, %arg0) : (!p4hir.ref<!ingress_metadata_t1>, !p4hir.ref<!headers>) -> !ipv4_fib_lpm_0
             p4hir.yield
           }
           p4hir.case(default, []) {
@@ -255,7 +255,7 @@ module {
           }
           p4hir.yield
         }
-        %nexthop_0_apply_result = p4hir.table_apply @ingress::@nexthop_0 : !nexthop_0
+        %nexthop_0_apply_result = p4hir.table_apply @ingress::@nexthop_0 with key(%arg1) : (!p4hir.ref<!ingress_metadata_t1>) -> !nexthop_0
       }
     }
   }

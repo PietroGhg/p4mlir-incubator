@@ -153,14 +153,14 @@ struct CompareValidityToD2BPattern : public OpConversionPattern<P4HIR::CmpOp> {
     LogicalResult matchAndRewrite(P4HIR::CmpOp op, OpAdaptor operands,
                                   ConversionPatternRewriter &rewriter) const override {
         auto cmpKind = op.getKind();
-        if (cmpKind != P4HIR::CmpOpKind::Eq)
-          return failure();
+        if (cmpKind != P4HIR::CmpOpKind::Eq) return failure();
         auto lhs = op.getLhs();
         auto rhs = op.getRhs();
-        bool isValidLhs = isa<P4HIR::ConstOp>(lhs.getDefiningOp()) && isa<P4HIR::ValidBitType>(lhs.getType());
-        bool isValidRhs = isa<P4HIR::ConstOp>(rhs.getDefiningOp()) && isa<P4HIR::ValidBitType>(lhs.getType());
-        if (!(isValidLhs || isValidRhs))
-          return failure();
+        bool isValidLhs =
+            isa<P4HIR::ConstOp>(lhs.getDefiningOp()) && isa<P4HIR::ValidBitType>(lhs.getType());
+        bool isValidRhs =
+            isa<P4HIR::ConstOp>(rhs.getDefiningOp()) && isa<P4HIR::ValidBitType>(lhs.getType());
+        if (!(isValidLhs || isValidRhs)) return failure();
         Value field = isValidLhs ? operands.getRhs() : operands.getLhs();
         rewriter.replaceOpWithNewOp<BMv2IR::DataToBoolOp>(op, field);
         return success();
@@ -384,10 +384,12 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         ConversionTarget target(context);
         RewritePatternSet patterns(&context);
         P4HIRToBMv2IRTypeConverter converter;
-        patterns.add<HeaderInstanceOpConversionPattern, ParserOpConversionPattern,
-                     ParserStateOpConversionPattern, ExtractOpConversionPattern,
-                     AssignOpToAssignHeaderPattern, AssignOpPattern, ReadOpConversionPattern,
-                     FieldRefConversionPattern, SymToValConversionPattern, CompareValidityToD2BPattern>(converter, &context);
+        patterns
+            .add<HeaderInstanceOpConversionPattern, ParserOpConversionPattern,
+                 ParserStateOpConversionPattern, ExtractOpConversionPattern,
+                 AssignOpToAssignHeaderPattern, AssignOpPattern, ReadOpConversionPattern,
+                 FieldRefConversionPattern, SymToValConversionPattern, CompareValidityToD2BPattern>(
+                converter, &context);
 
         target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
