@@ -261,11 +261,13 @@ def BMv2IR_TableOp : BMv2IR_Op<"table",
    [Symbol, NoTerminator]> {
   let arguments = (ins SymbolNameAttr:$sym_name,
                        SymbolRefArrayAttr:$actions,
-                       BMv2IR_ActionTableArrayAttr:$next_tables
+                       BMv2IR_ActionTableArrayAttr:$next_tables,
+                       BMv2IR_TableKeyArrayAttr:$keys,
+                       I32Attr:$size
   );
 
   let assemblyFormat = [{
-    $sym_name `actions` $actions `next_tables` $next_tables attr-dict
+    $sym_name `actions` $actions `next_tables` $next_tables `keys` $keys `size` $size attr-dict
   }];
 }
 

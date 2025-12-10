@@ -1,3 +1,4 @@
+#include <cmath>
 #include <optional>
 #include <string>
 
@@ -408,13 +409,72 @@ struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
         auto maybeActionTables = getActionTablePairs(op, actionCallees);
         if (failed(maybeActionTables)) return op.emitError("Error processing next_tables node");
 
-        auto newName = rewriter.getStringAttr(op.getSymName() + "_foo");  // TODO: use the same name
+        auto newName =
+            rewriter.getStringAttr(op.getSymName() + "_foo");  // FIXME: use the same name
+        // TODO: add helper
+        P4HIR::TableKeyOp keyOp = nullptr;
+        op.walk([&](P4HIR::TableKeyOp k) {
+            assert(!keyOp && "Multiple key ops");
+            keyOp = k;
+        });
+        auto maybeKeys = getKeys(keyOp);
+        if (failed(maybeKeys)) return failure();
+        // TODO: add helper
+        P4HIR::TableSizeOp sizeOp = nullptr;
+        op.walk([&](P4HIR::TableSizeOp size) {
+            assert(!sizeOp && "Multiple size ops");
+            sizeOp = size;
+        });
+        auto sizeAttr = dyn_cast<P4HIR::IntAttr>(sizeOp.getValue());
+        auto size = sizeAttr.getValue().getSExtValue();
         rewriter.create<BMv2IR::TableOp>(op.getLoc(), newName, rewriter.getArrayAttr(actionCallees),
-                                         rewriter.getArrayAttr(maybeActionTables.value()));
+                                         rewriter.getArrayAttr(maybeActionTables.value()),
+                                         rewriter.getArrayAttr(maybeKeys.value()),
+                                         rewriter.getI32IntegerAttr(size));
         return success();
     }
 
  private:
+    static FailureOr<BMv2IR::TableMatchKind> getTableMatchKind(P4HIR::MatchKindAttr matchKindAttr) {
+        auto val = matchKindAttr.getValue().getValue();
+        if (val == "exact") return BMv2IR::TableMatchKind::Exact;
+        if (val == "lpm") return BMv2IR::TableMatchKind::LPM;
+        if (val == "ternary") return BMv2IR::TableMatchKind::Ternary;
+        if (val == "range") return BMv2IR::TableMatchKind::Range;
+        if (val == "valid") return BMv2IR::TableMatchKind::Valid;
+        return failure();
+    }
+
+    static FailureOr<BMv2IR::TableKeyAttr> getKey(P4HIR::TableKeyEntryOp matchOp) {
+        auto maybeMatchKind = getTableMatchKind(matchOp.getMatchKindAttr());
+        if (failed(maybeMatchKind)) return matchOp.emitError("Error converting match kind");
+        // Note that this would probably be more straight forward if we applied this pattern after
+        // converting to BMv2IR ops
+        // TODO: implement support for other match kinds
+        auto readOp = llvm::dyn_cast_or_null<P4HIR::ReadOp>(matchOp.getValue().getDefiningOp());
+        if (!readOp) return matchOp.emitError("Expected ReadOp");
+        auto fieldOp = dyn_cast_or_null<P4HIR::StructFieldRefOp>(readOp.getRef().getDefiningOp());
+        if (!fieldOp) return matchOp.emitError("Expected StructFieldRefOp");
+        auto fieldName = StringAttr::get(matchOp.getContext(), fieldOp.getFieldName());
+        auto symRefOp = dyn_cast_or_null<BMv2IR::SymToValueOp>(fieldOp.getInput().getDefiningOp());
+        if (!symRefOp) return matchOp.emitError("Expected SymToValueOp");
+        auto header = symRefOp.getDecl();
+        return BMv2IR::TableKeyAttr::get(matchOp.getContext(), maybeMatchKind.value(), header,
+                                         fieldName, nullptr, nullptr);
+    }
+
+    static FailureOr<SmallVector<Attribute>> getKeys(P4HIR::TableKeyOp tableKeyOp) {
+        SmallVector<Attribute> res;
+        auto walkRes = tableKeyOp.walk([&](P4HIR::TableKeyEntryOp matchOp) {
+            auto maybeKey = getKey(matchOp);
+            if (failed(maybeKey)) return WalkResult::interrupt();
+            res.push_back(maybeKey.value());
+            return WalkResult::advance();
+        });
+        if (walkRes.wasInterrupted()) return failure();
+        return res;
+    }
+
     static FailureOr<SymbolRefAttr> getAction(P4HIR::TableActionOp tableActionOp) {
         Region &region = tableActionOp->getRegion(0);
         if (!region.hasOneBlock()) return failure();
@@ -455,7 +515,6 @@ struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
             controlApply = cApply;
         });
         if (!controlApply) return tableOp.emitError("No control_apply");
-        // TODO: add helper
         P4HIR::TableApplyOp applyOp = nullptr;
         controlApply.walk([&](P4HIR::TableApplyOp applOp) {
             if (applOp.getTable().getLeafReference() == tableOp.getSymName()) {
@@ -507,7 +566,7 @@ struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
         SmallPtrSet<Attribute, 5> processedActions;
         for (auto caseOp : switchOp.cases()) {
             if (caseOp.getKind() == P4HIR::CaseOpKind::Equal) {
-                // This assumes that the enum field and the corresponding action have the same
+                // This assumes that the enum field and the corresponding action have the same name
                 auto vals = caseOp.getValue();
                 assert(vals.size() == 1 && "More than value in equal case");
                 auto enumField = dyn_cast<P4HIR::EnumFieldAttr>(vals[0]);

@@ -53,4 +53,44 @@ def BMv2IR_ActionTableAttr : BMv2IR_Attr<"ActionTable", "action-table"> {
 def BMv2IR_ActionTableArrayAttr : TypedArrayAttrBase<
   BMv2IR_ActionTableAttr, "array of action-table pair attributes">;
 
+def BMv2IR_TableMatchKind : IntEnum<"TableMatchKind", "BMv2IR table match kind", [
+    I32EnumAttrCase<"Valid", 0, "valid">,
+    I32EnumAttrCase<"Exact", 1, "exact">,
+    I32EnumAttrCase<"LPM", 2, "lpm">,
+    I32EnumAttrCase<"Ternary", 3, "ternary">,
+    I32EnumAttrCase<"Range", 4, "range">
+], 32> {
+    let cppNamespace = "P4::P4MLIR::BMv2IR";
+}
+
+def BMv2IR_TableMatchKindAttr : EnumAttr<BMv2IR_Dialect, BMv2IR_TableMatchKind, "table_key_kind">;
+
+def BMv2IR_TableKeyAttr : BMv2IR_Attr<"TableKey", "table-key"> {
+  let summary = "Table key description attribute";
+  let description = [{
+    Represents one element in a table match key with the following attributes:
+      - match_type: The type of match (valid, exact, lpm, ternary, range)
+      - target: Field reference as 2-tuple [header, field] or header string for 'valid' (BMv2 table
+        keys can access only header instances or header fields).
+      - mask: Optional static mask (byte-padded, same width as field)
+      - name: Optional name for the match element (for logging/debugging)
+  }];
+
+  let parameters = (ins
+      "TableMatchKind":$match_type,
+      "mlir::SymbolRefAttr":$header,
+      OptionalParameter<"mlir::StringAttr">:$fieldName,
+      OptionalParameter<"mlir::DenseIntElementsAttr">:$mask,
+      OptionalParameter<"mlir::StringAttr">:$name
+  );
+
+  // TODO: add verifier
+  let assemblyFormat = [{
+      `<` `type` $match_type `,` `header` $header (`[` $fieldName^ `]`)? (`,` `mask` `=` $mask^)? (`,` `name` `=` $name^)? `>`
+  }];
+}
+
+def BMv2IR_TableKeyArrayAttr : TypedArrayAttrBase<BMv2IR_TableKeyAttr,
+    "Array of match key elements">;
+
 #endif // P4MLIR_DIALECT_BMv2IR_BMv2IR_ATTRS_TD
