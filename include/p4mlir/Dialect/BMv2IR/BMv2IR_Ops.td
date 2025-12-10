@@ -226,7 +226,18 @@ def BMv2IR_DataToBoolOp : BMv2IR_Op<"d2b"> {
   ];
 }
 
-def BMv2IR_ConditionalOp : BMv2IR_Op<"conditional", [Symbol]> {
+def BMv2IR_YieldOp : BMv2IR_Op<"yield", [ReturnLike, Terminator, NoMemoryEffect,
+    ParentOneOf<["ConditionalOp"]>]> {
+  let summary = "BMv2 region terminator";
+
+  let arguments = (ins Variadic<AnyType>:$args);
+  let assemblyFormat = [{($args^ `:` type($args))? attr-dict}];
+  let builders = [
+    OpBuilder<(ins), [{ /* nothing to do */ }]>,
+  ];
+}
+
+def BMv2IR_ConditionalOp : BMv2IR_Op<"conditional", [Symbol, SingleBlockImplicitTerminator<"BMv2IR::YieldOp">]> {
   let summary = "BMv2 conditional op";
   let description = [{
     The bm2ir.conditional op models if/else blocks according to the
@@ -235,12 +246,13 @@ def BMv2IR_ConditionalOp : BMv2IR_Op<"conditional", [Symbol]> {
     or `elseRef`. `thenRef` and `elseRef` must refer to either tables, conditionals or action calls. 
   }];
   let arguments = (ins SymbolNameAttr:$sym_name,
-                       BooleanType:$condition,
-                       OptionalAttr<SymbolRefAttr>:$thenRef,
+                       SymbolRefAttr:$thenRef,
                        OptionalAttr<SymbolRefAttr>:$elseRef);
+  let regions = (region 
+      MaxSizedRegion<1>:$conditionRegion);
 
   let assemblyFormat = [{
-    $condition (`then` $thenRef^)? (`else` $elseRef^)? attr-dict
+    $sym_name `then` $thenRef (`else` $elseRef^)? `expr` $conditionRegion attr-dict
   }];
   let hasVerifier = 1;
 }

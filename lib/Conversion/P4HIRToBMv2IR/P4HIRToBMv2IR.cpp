@@ -1,4 +1,5 @@
 #include <optional>
+#include <string>
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -15,9 +16,11 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Support/WalkResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Ops.h"
@@ -39,6 +42,7 @@ namespace P4::P4MLIR {
 using namespace P4::P4MLIR;
 
 namespace {
+static constexpr StringRef conditionalNameAttrName = "conditional_name";
 
 BMv2IR::FieldInfo convertFieldInfo(P4HIR::FieldInfo p4Field) {
     return BMv2IR::FieldInfo(p4Field.name, p4Field.type);
@@ -442,7 +446,6 @@ struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
     //   case block as next table
     static FailureOr<SmallVector<Attribute>> getActionTablePairs(P4HIR::TableOp tableOp,
                                                                  ArrayRef<Attribute> actions) {
-        llvm::errs() << "[ptrdbg] check: " << tableOp.getSymName() << "\n";
         auto controlParent = tableOp->getParentOfType<P4HIR::ControlOp>();
         if (!controlParent) return tableOp.emitError("No control parent");
         // TODO: add helper
@@ -487,7 +490,6 @@ struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
                 return result;
             })
             .Case([&](P4HIR::StructExtractOp extractOp) -> FailureOr<SmallVector<Attribute>> {
-                llvm::errs() << "[ptrdbg] in extract\n";
                 if (extractOp.getFieldName() != "action_run")
                     return extractOp.emitError("Only action_run field supported");
                 auto switchOp = dyn_cast_or_null<P4HIR::SwitchOp>(extractOp->getNextNode());
@@ -557,10 +559,93 @@ struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
     }
 };
 
+struct IfOpConversionPattern : public OpConversionPattern<P4HIR::IfOp> {
+    using OpConversionPattern<P4HIR::IfOp>::OpConversionPattern;
+
+    LogicalResult matchAndRewrite(P4HIR::IfOp op, OpAdaptor operands,
+                                  ConversionPatternRewriter &rewriter) const override {
+        auto name = dyn_cast<StringAttr>(op->getAttr(conditionalNameAttrName));
+        if (!name) return op.emitError("Expected conditional name");
+        auto controlApplyParent = op->getParentOfType<P4HIR::ControlApplyOp>();
+        if (!controlApplyParent) return failure();
+
+        ConversionPatternRewriter::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPointToStart(controlApplyParent->getBlock());
+        auto thenApplyOp = dyn_cast<P4HIR::TableApplyOp>(op.getThenRegion().front().front());
+        auto &elseRegion = op.getElseRegion();
+        auto elseApplyOp = elseRegion.empty()
+                               ? nullptr
+                               : dyn_cast<P4HIR::TableApplyOp>(elseRegion.front().front());
+
+        auto elseRef = elseApplyOp ? elseApplyOp.getTable() : nullptr;
+        auto condOp = rewriter.create<BMv2IR::ConditionalOp>(op.getLoc(), name,
+                                                             thenApplyOp.getTable(), elseRef);
+
+        // Clone ops the are used to compute the IfOp condition into the BMv2IR::ConditionalOp
+        // region: the corresponding JSON node has a node for the boolean expression, so we isolate
+        // the ops that compute the condition here. We assume that the leaf nodes in the expression
+        // are Header Instances.
+        // TODO: could there be other kinds of ops? Constants?
+        SmallVector<Operation *> expressionOps;
+        if (failed(getExpressionOps(op.getLoc(), op.getCondition(), expressionOps)))
+            return op.emitError("Error retrieving expression ops");
+        auto &block = condOp.getConditionRegion().emplaceBlock();
+        rewriter.setInsertionPointToStart(&block);
+
+        IRMapping mapper;
+        for (auto op : llvm::reverse(expressionOps)) {
+            auto clonedOp = rewriter.clone(*op, mapper);
+            for (auto [origResult, clonedResult] :
+                 llvm::zip(op->getResults(), clonedOp->getResults())) {
+                mapper.map(origResult, clonedResult);
+            }
+        }
+        rewriter.setInsertionPointToEnd(&block);
+        rewriter.create<BMv2IR::YieldOp>(
+            op.getLoc(),
+            ValueRange{mapper.lookup(op.getCondition().getDefiningOp())->getResult(0)});
+
+        return success();
+    }
+
+ private:
+    static LogicalResult getExpressionOps(Location loc, Value v, SmallVector<Operation *> &ops) {
+        auto defOp = v.getDefiningOp();
+        if (!defOp) return emitError(loc, "Expected defining operation");
+        ops.push_back(defOp);
+        if (isa<BMv2IR::SymToValueOp>(defOp)) return success();
+
+        for (auto &operand : defOp->getOpOperands()) {
+            if (failed(getExpressionOps(loc, operand.get(), ops))) return failure();
+        }
+        return success();
+    }
+};
+
+static void setUniqueIfOpName(P4HIR::IfOp ifOp, unsigned id) {
+    auto name = "conditional_node_" + std::to_string(id);
+    ifOp->setAttr(conditionalNameAttrName, StringAttr::get(ifOp.getContext(), name));
+}
+
 struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv2IRPass> {
     void runOnOperation() override {
         MLIRContext &context = getContext();
         mlir::ModuleOp module = getOperation();
+        // We need to give unique names to p4hir.if operations before converting to BMv2IR because
+        // BMv2 represents control flow in control_apply blocks by having `conditional` nodes in the
+        // JSON, and each has an unique name.
+
+        unsigned conditionalId = 0;
+        module.walk([&](P4HIR::IfOp ifOp) {
+            auto controlApplyParent = ifOp->getParentOfType<P4HIR::ControlApplyOp>();
+            if (!controlApplyParent) return WalkResult::skip();
+            auto controlParent = controlApplyParent->getParentOfType<P4HIR::ControlOp>();
+            if (!controlParent) return WalkResult::skip();
+            setUniqueIfOpName(ifOp, conditionalId);
+            conditionalId++;
+            return WalkResult::advance();
+        });
+
         ConversionTarget target(context);
         RewritePatternSet patterns(&context);
         P4HIRToBMv2IRTypeConverter converter;
@@ -568,7 +653,8 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
                      ParserStateOpConversionPattern, ExtractOpConversionPattern,
                      AssignOpToAssignHeaderPattern, AssignOpPattern, ReadOpConversionPattern,
                      FieldRefConversionPattern, SymToValConversionPattern,
-                     CompareValidityToD2BPattern, TableOpConversionPattern>(converter, &context);
+                     CompareValidityToD2BPattern, TableOpConversionPattern, IfOpConversionPattern>(
+            converter, &context);
 
         target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
@@ -591,6 +677,7 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         target.addIllegalOp<P4HIR::ReadOp>();
         target.addIllegalOp<P4HIR::CmpOp>();
         target.addIllegalOp<P4HIR::TableOp>();
+        target.addIllegalOp<P4HIR::IfOp>();
 
         if (failed(applyPartialConversion(module, target, std::move(patterns))))
             signalPassFailure();
