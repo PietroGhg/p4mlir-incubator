@@ -20,6 +20,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/ValueRange.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/WalkResult.h"
@@ -413,6 +414,13 @@ struct PipelineConversionPattern : public OpConversionPattern<P4HIR::ControlOp> 
         if (!isTopLevelControl(op)) return failure();
 
         auto controlApply = cast<P4HIR::ControlApplyOp>(op.getBody().front().getTerminator());
+        {
+            // Before converting tables, we insert an explicit p4hir.yield op at the end of the
+            // control_apply block to simplify the next_tables section generation.
+            ConversionPatternRewriter::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPointToEnd(&controlApply.getBody().front());
+            rewriter.create<P4HIR::YieldOp>(op.getLoc(), ValueRange{});
+        }
         // Convert tables
         auto tableRes = op.walk([&](P4HIR::TableOp tableOp) {
             if (failed(convertTable(tableOp, controlApply, rewriter)))
@@ -423,7 +431,7 @@ struct PipelineConversionPattern : public OpConversionPattern<P4HIR::ControlOp> 
 
         // Convert IfOps inside control_apply to BMv2IR::ConditionalOp
         auto ifRes = controlApply.walk([&](P4HIR::IfOp ifOp) {
-            if (failed(convertIfOp(ifOp, rewriter))) return WalkResult::interrupt();
+            if (failed(convertIfOp(ifOp, controlApply, rewriter))) return WalkResult::interrupt();
             return WalkResult::advance();
         });
         if (ifRes.wasInterrupted()) return failure();
@@ -587,9 +595,10 @@ struct PipelineConversionPattern : public OpConversionPattern<P4HIR::ControlOp> 
 
     static FailureOr<SmallVector<Attribute>> getActionTablePairsForNextNode(
         Operation *nextOp, P4HIR::ControlApplyOp controlApply, ArrayRef<Attribute> actions) {
+        assert(nextOp && "Expected valid node");
         return llvm::TypeSwitch<Operation *, FailureOr<SmallVector<Attribute>>>(nextOp)
             .Case([&](P4HIR::YieldOp yieldOp) -> FailureOr<SmallVector<Attribute>> {
-                return getNextApplyForYieldOp(yieldOp, controlApply, actions);
+                return getActionTablePairsForYieldOp(yieldOp, controlApply, actions);
             })
             .Case([&](P4HIR::TableApplyOp nextApplyOp) {
                 SmallVector<Attribute> result;
@@ -601,12 +610,23 @@ struct PipelineConversionPattern : public OpConversionPattern<P4HIR::ControlOp> 
                 }
                 return result;
             })
+            .Case([&](P4HIR::IfOp ifOp) -> FailureOr<SmallVector<Attribute>> {
+                SmallVector<Attribute> result;
+                auto nextTable = getUniqueIfOpName(ifOp);
+                if (failed(nextTable)) return failure();
+                for (auto attr : actions) {
+                    auto action = cast<SymbolRefAttr>(attr);
+                    result.push_back(
+                        BMv2IR::ActionTableAttr::get(ifOp.getContext(), action, nextTable.value()));
+                }
+                return result;
+            })
             .Case([&](P4HIR::StructExtractOp extractOp) -> FailureOr<SmallVector<Attribute>> {
                 if (extractOp.getFieldName() != "action_run")
                     return extractOp.emitError("Only action_run field supported");
                 auto switchOp = dyn_cast_or_null<P4HIR::SwitchOp>(extractOp->getNextNode());
                 if (!switchOp) extractOp.emitError("Expected SwitchOp after ExtractOp");
-                return getNextTablesFromSwitch(switchOp, actions);
+                return getNextTablesFromSwitch(switchOp, controlApply, actions);
             })
             .Default([](Operation *op) -> FailureOr<SmallVector<Attribute>> {
                 return op->emitError("Unsupported operation");
@@ -615,22 +635,16 @@ struct PipelineConversionPattern : public OpConversionPattern<P4HIR::ControlOp> 
 
     static Operation *getNextApplyOrConditionalNode(Operation *op) {
         auto nextOp = op->getNextNode();
-        while (nextOp && !isa<P4HIR::TableApplyOp, P4HIR::IfOp, P4HIR::YieldOp>(nextOp))
+        while (
+            nextOp &&
+            !isa<P4HIR::TableApplyOp, P4HIR::IfOp, P4HIR::YieldOp, P4HIR::StructExtractOp>(nextOp))
             nextOp = nextOp->getNextNode();
         return nextOp;
     }
 
-    static FailureOr<SmallVector<Attribute>> getNextApplyForYieldOp(
+    static FailureOr<SmallVector<Attribute>> getActionTablePairsForYieldOp(
         P4HIR::YieldOp yieldOp, P4HIR::ControlApplyOp controlApply, ArrayRef<Attribute> actions) {
-        Operation *nextOp = nullptr;
-        if (auto caseOp = yieldOp->getParentOfType<P4HIR::CaseOp>()) {
-            if (!caseOp) return yieldOp.emitError("Expected CaseOp parent");
-            auto switchOp = cast<P4HIR::SwitchOp>(caseOp->getParentOp());
-            nextOp = getNextApplyOrConditionalNode(switchOp);
-        } else if (auto ifOp = yieldOp->getParentOfType<P4HIR::IfOp>()) {
-            nextOp = getNextApplyOrConditionalNode(ifOp);
-        }
-        if (!nextOp) {
+        if (yieldOp->getParentOp() == controlApply) {
             // This is the final table, return `null` as next table for every action
             SmallVector<Attribute> result;
             for (auto attr : actions) {
@@ -640,11 +654,20 @@ struct PipelineConversionPattern : public OpConversionPattern<P4HIR::ControlOp> 
             }
             return result;
         }
+        Operation *nextOp = nullptr;
+        if (auto caseOp = yieldOp->getParentOfType<P4HIR::CaseOp>()) {
+            if (!caseOp) return yieldOp.emitError("Expected CaseOp parent");
+            auto switchOp = cast<P4HIR::SwitchOp>(caseOp->getParentOp());
+            nextOp = getNextApplyOrConditionalNode(switchOp);
+        } else if (auto ifOp = yieldOp->getParentOfType<P4HIR::IfOp>()) {
+            nextOp = getNextApplyOrConditionalNode(ifOp);
+        }
         return getActionTablePairsForNextNode(nextOp, controlApply, actions);
     }
 
-    static FailureOr<SmallVector<Attribute>> getNextTablesFromSwitch(P4HIR::SwitchOp switchOp,
-                                                                     ArrayRef<Attribute> actions) {
+    static FailureOr<SmallVector<Attribute>> getNextTablesFromSwitch(
+        P4HIR::SwitchOp switchOp, P4HIR::ControlApplyOp controlApplyOp,
+        ArrayRef<Attribute> actions) {
         SmallVector<Attribute> result;
         SmallPtrSet<Attribute, 5> processedActions;
         for (auto caseOp : switchOp.cases()) {
@@ -670,59 +693,56 @@ struct PipelineConversionPattern : public OpConversionPattern<P4HIR::ControlOp> 
                 processedActions.insert(*actionIt);
             }
         }
-        // For the ops that aren't covered by explicit cases, we look at the default case. If the
-        // default case just yields, the next transition is the first table_apply after the switch,
-        // otherwise it's the first table_apply in the case region.
+        // For the actions that aren't covered by explicit cases, we look at the next table from the
+        // default case.
         auto defaultCase = switchOp.getDefaultCase();
         if (!defaultCase) return switchOp.emitError("Expected default case");
         auto &firstCaseOp = defaultCase.getCaseRegion().front().front();
-        auto maybeNextTable =
-            llvm::TypeSwitch<Operation *, FailureOr<P4HIR::TableApplyOp>>(&firstCaseOp)
-                .Case([](P4HIR::TableApplyOp tableApplyOp) { return tableApplyOp; })
-                .Case([&](P4HIR::YieldOp YieldOp) -> FailureOr<P4HIR::TableApplyOp> {
-                    auto nextOp = switchOp->getNextNode();
-                    if (isa<P4HIR::YieldOp>(nextOp)) return P4HIR::TableApplyOp();
-                    if (auto tableApply = dyn_cast<P4HIR::TableApplyOp>(nextOp)) return tableApply;
-                    return failure();
-                })
-                .Default([](Operation *op) -> FailureOr<P4HIR::TableApplyOp> {
-                    return op->emitError("Unexpected op");
-                });
-
-        if (failed(maybeNextTable)) return switchOp.emitError("Error processing default case");
-        auto nextTable = maybeNextTable.value() ? maybeNextTable.value().getTable() : nullptr;
-        for (auto a : actions) {
+        SmallVector<Attribute> actionsToProcess;
+        for (auto &a : actions) {
             if (processedActions.contains(a)) continue;
-            auto action = cast<SymbolRefAttr>(a);
-            result.push_back(
-                BMv2IR::ActionTableAttr::get(switchOp.getContext(), action, nextTable));
+            actionsToProcess.push_back(a);
         }
+        auto maybeDefaultActionTablePairs =
+            getActionTablePairsForNextNode(&firstCaseOp, controlApplyOp, actionsToProcess);
+        if (failed(maybeDefaultActionTablePairs)) return failure();
+        auto defaultActionTablePairs = maybeDefaultActionTablePairs.value();
+        result.append(defaultActionTablePairs.begin(), defaultActionTablePairs.end());
         return result;
     }
 
-    static LogicalResult convertIfOp(P4HIR::IfOp op, ConversionPatternRewriter &rewriter) {
+    static LogicalResult convertIfOp(P4HIR::IfOp op, P4HIR::ControlApplyOp controlApply,
+                                     ConversionPatternRewriter &rewriter) {
         auto name = getUniqueIfOpName(op);
         if (failed(name)) return op.emitError("Expected conditional name");
-        auto controlApplyParent = op->getParentOfType<P4HIR::ControlApplyOp>();
-        if (!controlApplyParent) return failure();
 
         ConversionPatternRewriter::InsertionGuard guard(rewriter);
-        rewriter.setInsertionPoint(controlApplyParent);
-        auto thenApplyOp = dyn_cast<P4HIR::TableApplyOp>(op.getThenRegion().front().front());
-        auto &elseRegion = op.getElseRegion();
-        auto elseApplyOp = elseRegion.empty()
-                               ? nullptr
-                               : dyn_cast<P4HIR::TableApplyOp>(elseRegion.front().front());
+        rewriter.setInsertionPoint(controlApply);
+        auto getNextSym = [](Region &r) -> FailureOr<SymbolRefAttr> {
+            if (r.empty()) return {nullptr};
+            Operation *op = &r.front().front();
+            while (op) {
+                if (auto tableApply = dyn_cast<P4HIR::TableApplyOp>(op))
+                    return tableApply.getTable();
+                if (auto ifOp = dyn_cast<P4HIR::IfOp>(op)) return getUniqueIfOpName(ifOp);
+                op = op->getNextNode();
+            }
+            return failure();
+        };
+        auto maybeThenSym = getNextSym(op.getThenRegion());
+        auto maybeElseSym = getNextSym(op.getElseRegion());
+        if (failed(maybeThenSym) || failed(maybeElseSym))
+            return op.emitError("Error while computing then/else next sym");
 
-        auto elseRef = elseApplyOp ? elseApplyOp.getTable() : nullptr;
-        auto condOp = rewriter.create<BMv2IR::ConditionalOp>(
-            op.getLoc(), name.value().getLeafReference(), thenApplyOp.getTable(), elseRef);
+        auto condOp =
+            rewriter.create<BMv2IR::ConditionalOp>(op.getLoc(), name.value().getLeafReference(),
+                                                   maybeThenSym.value(), maybeElseSym.value());
 
         // Clone ops the are used to compute the IfOp condition into the BMv2IR::ConditionalOp
         // region: the corresponding JSON node has a node for the boolean expression, so we isolate
         // the ops that compute the condition here. We assume that the leaf nodes in the expression
         // are Header Instances.
-        // TODO: could there be other kinds of ops? Constants?
+        // TODO: could there be other kinds of ops as leaf? Constants?
         SmallVector<Operation *> expressionOps;
         if (failed(getIfOpConditionOps(op.getLoc(), op.getCondition(), expressionOps)))
             return op.emitError("Error retrieving expression ops");
@@ -770,10 +790,10 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
     void runOnOperation() override {
         MLIRContext &context = getContext();
         mlir::ModuleOp module = getOperation();
+
         // We need to give unique names to p4hir.if operations before converting to BMv2IR because
         // BMv2 represents control flow in control_apply blocks by having `conditional` nodes in the
         // JSON, and each has an unique name.
-
         unsigned conditionalId = 0;
         module.walk([&](P4HIR::IfOp ifOp) {
             auto controlApplyParent = ifOp->getParentOfType<P4HIR::ControlApplyOp>();

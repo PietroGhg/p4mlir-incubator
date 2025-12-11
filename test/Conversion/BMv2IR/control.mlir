@@ -115,6 +115,11 @@ module {
       p4hir.assign %arg3, %bd_field_ref : <!b16i>
       p4hir.return
     }
+// CHECK:    bmv2ir.table @bd_1
+// CHECK:     actions [@ingress::@set_vrf, @ingress::@NoAction_3]
+// CHECK:     next_tables [#bmv2ir<action-table<@ingress::@set_vrf : @ingress::@ipv4_fib_0>>, #bmv2ir<action-table<@ingress::@NoAction_3 : @ingress::@ipv4_fib_0>>]
+// CHECK:     keys [#bmv2ir<table-key<type exact, header @ingress1["bd"]>>]
+// CHECK:     size 65536
     p4hir.table @bd_1 annotations {name = "ingress.bd"} {
       p4hir.table_actions {
         p4hir.table_action @set_vrf(%arg3: !b12i {p4hir.annotations = {name = "vrf"}, p4hir.param_name = "vrf_1"}) {
@@ -135,6 +140,12 @@ module {
         p4hir.call @ingress::@NoAction_3 () : () -> ()
       }
     }
+
+// CHECK:    bmv2ir.table @ipv4_fib_0
+// CHECK:     actions [@ingress::@on_miss_2, @ingress::@fib_hit_nexthop, @ingress::@NoAction_4]
+// CHECK:     next_tables [#bmv2ir<action-table<@ingress::@on_miss_2 : @ingress::@ipv4_fib_lpm_0>>, #bmv2ir<action-table<@ingress::@fib_hit_nexthop : @ingress::@nexthop_0>>, #bmv2ir<action-table<@ingress::@NoAction_4 : @ingress::@nexthop_0>>]
+// CHECK:     keys [#bmv2ir<table-key<type exact, header @ingress1["vrf"]>>, #bmv2ir<table-key<type exact, header @ingress0_ipv4["dstAddr"]>>]
+// CHECK:     size 131072
     p4hir.table @ipv4_fib_0 annotations {name = "ingress.ipv4_fib"} {
       p4hir.table_actions {
         p4hir.table_action @on_miss_2() {
@@ -162,6 +173,11 @@ module {
         p4hir.call @ingress::@NoAction_4 () : () -> ()
       }
     }
+// CHECK:    bmv2ir.table @ipv4_fib_lpm_0
+// CHECK:     actions [@ingress::@on_miss_3, @ingress::@fib_hit_nexthop_1, @ingress::@NoAction_5]
+// CHECK:     next_tables [#bmv2ir<action-table<@ingress::@on_miss_3 : @ingress::@nexthop_0>>, #bmv2ir<action-table<@ingress::@fib_hit_nexthop_1 : @ingress::@nexthop_0>>, #bmv2ir<action-table<@ingress::@NoAction_5 : @ingress::@nexthop_0>>]
+// CHECK:     keys [#bmv2ir<table-key<type exact, header @ingress1["vrf"]>>, #bmv2ir<table-key<type lpm, header @ingress0_ipv4["dstAddr"]>>]
+// CHECK:     size 16384
     p4hir.table @ipv4_fib_lpm_0 annotations {name = "ingress.ipv4_fib_lpm"} {
       p4hir.table_actions {
         p4hir.table_action @on_miss_3() {
@@ -189,6 +205,11 @@ module {
         p4hir.call @ingress::@NoAction_5 () : () -> ()
       }
     }
+// CHECK:    bmv2ir.table @nexthop_0
+// CHECK:     actions [@ingress::@on_miss_4, @ingress::@set_egress_details, @ingress::@NoAction_6]
+// CHECK:     next_tables [#bmv2ir<action-table<@ingress::@on_miss_4>>, #bmv2ir<action-table<@ingress::@set_egress_details>>, #bmv2ir<action-table<@ingress::@NoAction_6>>]
+// CHECK:     keys [#bmv2ir<table-key<type exact, header @ingress1["nexthop_index"]>>]
+// CHECK:     size 32768
     p4hir.table @nexthop_0 annotations {name = "ingress.nexthop"} {
       p4hir.table_actions {
         p4hir.table_action @on_miss_4() {
@@ -212,6 +233,11 @@ module {
         p4hir.call @ingress::@NoAction_6 () : () -> ()
       }
     }
+// CHECK:    bmv2ir.table @port_mapping_0
+// CHECK:     actions [@ingress::@set_bd, @ingress::@NoAction_7]
+// CHECK:     next_tables [#bmv2ir<action-table<@ingress::@set_bd : @ingress::@bd_1>>, #bmv2ir<action-table<@ingress::@NoAction_7 : @ingress::@bd_1>>]
+// CHECK:     keys [#bmv2ir<table-key<type exact, header @ingress2["ingress_port"]>>]
+// CHECK:     size 32768
     p4hir.table @port_mapping_0 annotations {name = "ingress.port_mapping"} {
       p4hir.table_actions {
         p4hir.table_action @set_bd(%arg3: !b16i {p4hir.annotations = {name = "bd"}, p4hir.param_name = "bd_0"}) {
@@ -232,14 +258,16 @@ module {
         p4hir.call @ingress::@NoAction_7 () : () -> ()
       }
     }
+// CHECK:    bmv2ir.conditional @conditional_name0 then @ingress::@port_mapping_0 expr {
+// CHECK:      %0 = bmv2ir.field @ingress0_ipv4["$valid$"] -> !b1i
+// CHECK:      %1 = bmv2ir.d2b %0 : !b1i
+// CHECK:      bmv2ir.yield %1 : !p4hir.bool
+// CHECK:    }
     p4hir.control_apply {
       %ingress0_ipv4 = bmv2ir.symbol_ref @ingress0_ipv4 : !p4hir.ref<!ipv4_t>
       %__valid_field_ref = p4hir.struct_field_ref %ingress0_ipv4["__valid"] : <!ipv4_t>
       %val = p4hir.read %__valid_field_ref : <!validity_bit>
       %eq = p4hir.cmp(eq, %val : !validity_bit, %valid : !validity_bit)
-// CHECK: %[[VALID_F:.*]] = bmv2ir.field @ingress0_ipv4["$valid$"] -> !b1i
-// CHECK: %[[D2B:.*]] = bmv2ir.d2b %[[VALID_F]] : !b1i
-// CHECK: p4hir.if %[[D2B]] {
       p4hir.if %eq {
         %port_mapping_0_apply_result = p4hir.table_apply @ingress::@port_mapping_0 with key(%arg2) : (!p4hir.ref<!standard_metadata_t1>) -> !port_mapping_0
         %bd_1_apply_result = p4hir.table_apply @ingress::@bd_1 with key(%arg1) : (!p4hir.ref<!ingress_metadata_t1>) -> !bd_1
