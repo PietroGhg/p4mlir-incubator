@@ -1,7 +1,11 @@
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Ops.h"
 
+#include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/LogicalResult.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/SymbolTable.h"
+#include "p4mlir//Dialect/P4HIR/P4HIR_Ops.h"
 #include "p4mlir//Dialect/P4HIR/P4HIR_Types.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_Dialect.h"
 #include "p4mlir/Dialect/BMv2IR/BMv2IR_OpInterfaces.h"
@@ -49,15 +53,56 @@ LogicalResult SymToValueOp::verifySymbolUses(SymbolTableCollection &symbolTable)
     auto decl = symbolTable.lookupSymbolIn(getParentModule(*this), declAttr);
     if (!decl) return emitOpError("cannot resolve symbol '") << declAttr << "' to declaration";
 
-    // if (!mlir::isa<BMv2IR::HeaderInstanceOp>(decl))
-    //     return emitOpError("invalid symbol reference: ") << decl << ", expected header instance";
+    if (!mlir::isa<BMv2IR::HeaderInstanceOp>(decl))
+        return emitOpError("invalid symbol reference: ") << decl << ", expected header instance";
 
     return mlir::success();
 }
 
 LogicalResult ConditionalOp::verify() {
-    // TODO: check that the then and else symbols refer to either tables, action calls or
-    // conditionals
+    // Check that the then and else symbols refer to either tables, conditionals or
+    // (TODO) action calls
+    auto moduleOp = getParentModule(*this);
+    auto checkSym = [&](SymbolRefAttr ref) -> LogicalResult {
+        auto thenDecl = SymbolTable::lookupSymbolIn(moduleOp, ref);
+        if (!thenDecl) return emitOpError("cannot resolve symbol ") << thenDecl << "\n";
+        if (!isa<BMv2IR::TableOp, BMv2IR::ConditionalOp>(thenDecl))
+            return emitOpError("symbol resolves to invalid op");
+        return success();
+    };
+
+    if (failed(checkSym(getThenRef()))) return failure();
+
+    auto elseRef = getElseRefAttr();
+    if (!elseRef) return success();
+    return checkSym(elseRef);
+}
+
+LogicalResult TableOp::verify() {
+    auto actions = getActions();
+    auto nextTables = llvm::map_to_vector(
+        getNextTablesAttr(), [](Attribute a) { return cast<BMv2IR::ActionTableAttr>(a); });
+    auto moduleOp = getParentModule(*this);
+    for (auto a : actions) {
+        auto actionRef = cast<SymbolRefAttr>(a);
+        auto op = SymbolTable::lookupSymbolIn(moduleOp, actionRef);
+        if (!op) return emitOpError("cannot resolve symbol ") << op << "\n";
+        if (auto actionOp = dyn_cast<P4HIR::FuncOp>(op); !actionOp || !actionOp.getAction())
+            return emitOpError("symbols resolves to invalid op: ") << op << "\n";
+
+        auto it = llvm::find_if(nextTables, [&](ActionTableAttr at) {
+            return at.getAction().getLeafReference() == actionRef.getLeafReference();
+        });
+        if (it == nextTables.end())
+            return emitOpError("can't find next_table entry for action: ") << actionRef << "\n";
+        auto tableSymRef = it->getTable();
+        if (tableSymRef) {
+            auto tableDecl = SymbolTable::lookupSymbolIn(moduleOp, it->getTable());
+            if (!tableDecl) return emitError("cannot resolve symbol ") << tableDecl << "\n";
+            if (!isa<BMv2IR::TableOp>(tableDecl))
+                return emitOpError("expected table op, got ") << tableDecl << "\n";
+        }
+    }
     return success();
 }
 

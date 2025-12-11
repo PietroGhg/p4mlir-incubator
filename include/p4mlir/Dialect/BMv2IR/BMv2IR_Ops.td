@@ -258,7 +258,7 @@ def BMv2IR_ConditionalOp : BMv2IR_Op<"conditional", [Symbol, SingleBlockImplicit
 }
 
 def BMv2IR_TableOp : BMv2IR_Op<"table",
-   [Symbol, NoTerminator]> {
+   [Symbol]> {
   let arguments = (ins SymbolNameAttr:$sym_name,
                        SymbolRefArrayAttr:$actions,
                        BMv2IR_ActionTableArrayAttr:$next_tables,
@@ -269,6 +269,7 @@ def BMv2IR_TableOp : BMv2IR_Op<"table",
   let assemblyFormat = [{
     $sym_name `\n` `actions` $actions `\n` `next_tables` $next_tables `\n` `keys` $keys `\n` `size` $size attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 def BMv2IR_PipelineOp : BMv2IR_Op<"pipeline", [
