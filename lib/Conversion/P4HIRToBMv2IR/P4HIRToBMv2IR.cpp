@@ -43,7 +43,14 @@ namespace P4::P4MLIR {
 using namespace P4::P4MLIR;
 
 namespace {
+
 static constexpr StringRef conditionalNameAttrName = "conditional_name";
+
+static FailureOr<StringAttr> getUniqueIfOpName(P4HIR::IfOp ifOp) {
+    auto name = dyn_cast<StringAttr>(ifOp->getAttr(conditionalNameAttrName));
+    if (!name) return ifOp.emitError("Expected conditional name");
+    return name;
+}
 
 BMv2IR::FieldInfo convertFieldInfo(P4HIR::FieldInfo p4Field) {
     return BMv2IR::FieldInfo(p4Field.name, p4Field.type);
@@ -390,11 +397,61 @@ struct ParserOpConversionPattern : public OpConversionPattern<P4HIR::ParserOp> {
     }
 };
 
-struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
-    using OpConversionPattern<P4HIR::TableOp>::OpConversionPattern;
+struct PipelineConversionPattern : public OpConversionPattern<P4HIR::ControlOp> {
+    using OpConversionPattern<P4HIR::ControlOp>::OpConversionPattern;
 
-    LogicalResult matchAndRewrite(P4HIR::TableOp op, OpAdaptor operands,
+    LogicalResult matchAndRewrite(P4HIR::ControlOp op, OpAdaptor operands,
                                   ConversionPatternRewriter &rewriter) const override {
+        if (!isTopLevelControl(op)) return failure();
+
+        // Convert tables
+        auto tableRes = op.walk([&](P4HIR::TableOp tableOp) {
+            if (failed(convertTable(tableOp, rewriter))) return WalkResult::interrupt();
+            return WalkResult::advance();
+        });
+        if (tableRes.wasInterrupted()) return failure();
+
+        // Convert IfOps inside control_apply to BMv2IR::ConditionalOp
+        auto controlApply = cast<P4HIR::ControlApplyOp>(op.getBody().front().getTerminator());
+        auto ifRes = controlApply.walk([&](P4HIR::IfOp ifOp) {
+            if (failed(convertIfOp(ifOp, rewriter))) return WalkResult::interrupt();
+            return WalkResult::advance();
+        });
+        if (ifRes.wasInterrupted()) return failure();
+
+        auto maybeInitTable = getInitTable(controlApply);
+        if (failed(maybeInitTable)) return failure();
+        auto pipelineOp = rewriter.create<BMv2IR::PipelineOp>(op.getLoc(), op.getSymName(),
+                                                              maybeInitTable.value());
+        // At this point we can erase the control_apply since all the information it carried is in
+        // the next_tables sections, conditionals, and init_table.
+        rewriter.eraseOp(controlApply);
+        pipelineOp.getRegion().takeBody(op.getRegion());
+        rewriter.replaceOp(op, pipelineOp);
+        return success();
+    }
+
+ private:
+    static bool isTopLevelControl(P4HIR::ControlOp controlOp) {
+        // TODO: check how to determine if a control is a top level one
+        return true;
+    }
+
+    static FailureOr<SymbolRefAttr> getInitTable(P4HIR::ControlApplyOp controlApplyOp) {
+        auto &block = controlApplyOp.getBody().front();
+        Operation *op = &block.front();
+        while (op && !isa<P4HIR::TableApplyOp, P4HIR::IfOp>(op)) op = op->getNextNode();
+        if (!op) return controlApplyOp.emitError("Error retrieving initial table");
+        if (auto applyOp = dyn_cast<P4HIR::TableApplyOp>(op)) return applyOp.getTable();
+        auto ifOp = cast<P4HIR::IfOp>(op);
+        auto maybeName = getUniqueIfOpName(ifOp);
+        if (failed(maybeName)) return failure();
+        return SymbolRefAttr::get(maybeName.value());
+    }
+
+    static LogicalResult convertTable(P4HIR::TableOp op, ConversionPatternRewriter &rewriter) {
+        ConversionPatternRewriter::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPoint(op);
         // Build the list of actions.
         // We assume that table_actions only contain the call to the actual control action
         SmallVector<P4HIR::TableActionOp> tableActions;
@@ -409,8 +466,6 @@ struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
         auto maybeActionTables = getActionTablePairs(op, actionCallees);
         if (failed(maybeActionTables)) return op.emitError("Error processing next_tables node");
 
-        auto newName =
-            rewriter.getStringAttr(op.getSymName() + "_foo");  // FIXME: use the same name
         // TODO: add helper
         P4HIR::TableKeyOp keyOp = nullptr;
         op.walk([&](P4HIR::TableKeyOp k) {
@@ -427,14 +482,13 @@ struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
         });
         auto sizeAttr = dyn_cast<P4HIR::IntAttr>(sizeOp.getValue());
         auto size = sizeAttr.getValue().getSExtValue();
-        rewriter.create<BMv2IR::TableOp>(op.getLoc(), newName, rewriter.getArrayAttr(actionCallees),
-                                         rewriter.getArrayAttr(maybeActionTables.value()),
-                                         rewriter.getArrayAttr(maybeKeys.value()),
-                                         rewriter.getI32IntegerAttr(size));
+        rewriter.replaceOpWithNewOp<BMv2IR::TableOp>(
+            op, op.getSymNameAttr(), rewriter.getArrayAttr(actionCallees),
+            rewriter.getArrayAttr(maybeActionTables.value()),
+            rewriter.getArrayAttr(maybeKeys.value()), rewriter.getI32IntegerAttr(size));
         return success();
     }
 
- private:
     static FailureOr<BMv2IR::TableMatchKind> getTableMatchKind(P4HIR::MatchKindAttr matchKindAttr) {
         auto val = matchKindAttr.getValue().getValue();
         if (val == "exact") return BMv2IR::TableMatchKind::Exact;
@@ -616,20 +670,15 @@ struct TableOpConversionPattern : public OpConversionPattern<P4HIR::TableOp> {
         }
         return result;
     }
-};
 
-struct IfOpConversionPattern : public OpConversionPattern<P4HIR::IfOp> {
-    using OpConversionPattern<P4HIR::IfOp>::OpConversionPattern;
-
-    LogicalResult matchAndRewrite(P4HIR::IfOp op, OpAdaptor operands,
-                                  ConversionPatternRewriter &rewriter) const override {
+    static LogicalResult convertIfOp(P4HIR::IfOp op, ConversionPatternRewriter &rewriter) {
         auto name = dyn_cast<StringAttr>(op->getAttr(conditionalNameAttrName));
         if (!name) return op.emitError("Expected conditional name");
         auto controlApplyParent = op->getParentOfType<P4HIR::ControlApplyOp>();
         if (!controlApplyParent) return failure();
 
         ConversionPatternRewriter::InsertionGuard guard(rewriter);
-        rewriter.setInsertionPointToStart(controlApplyParent->getBlock());
+        rewriter.setInsertionPoint(controlApplyParent);
         auto thenApplyOp = dyn_cast<P4HIR::TableApplyOp>(op.getThenRegion().front().front());
         auto &elseRegion = op.getElseRegion();
         auto elseApplyOp = elseRegion.empty()
@@ -646,7 +695,7 @@ struct IfOpConversionPattern : public OpConversionPattern<P4HIR::IfOp> {
         // are Header Instances.
         // TODO: could there be other kinds of ops? Constants?
         SmallVector<Operation *> expressionOps;
-        if (failed(getExpressionOps(op.getLoc(), op.getCondition(), expressionOps)))
+        if (failed(getIfOpConditionOps(op.getLoc(), op.getCondition(), expressionOps)))
             return op.emitError("Error retrieving expression ops");
         auto &block = condOp.getConditionRegion().emplaceBlock();
         rewriter.setInsertionPointToStart(&block);
@@ -667,15 +716,14 @@ struct IfOpConversionPattern : public OpConversionPattern<P4HIR::IfOp> {
         return success();
     }
 
- private:
-    static LogicalResult getExpressionOps(Location loc, Value v, SmallVector<Operation *> &ops) {
+    static LogicalResult getIfOpConditionOps(Location loc, Value v, SmallVector<Operation *> &ops) {
         auto defOp = v.getDefiningOp();
         if (!defOp) return emitError(loc, "Expected defining operation");
         ops.push_back(defOp);
         if (isa<BMv2IR::SymToValueOp>(defOp)) return success();
 
         for (auto &operand : defOp->getOpOperands()) {
-            if (failed(getExpressionOps(loc, operand.get(), ops))) return failure();
+            if (failed(getIfOpConditionOps(loc, operand.get(), ops))) return failure();
         }
         return success();
     }
@@ -712,8 +760,7 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
                      ParserStateOpConversionPattern, ExtractOpConversionPattern,
                      AssignOpToAssignHeaderPattern, AssignOpPattern, ReadOpConversionPattern,
                      FieldRefConversionPattern, SymToValConversionPattern,
-                     CompareValidityToD2BPattern, TableOpConversionPattern, IfOpConversionPattern>(
-            converter, &context);
+                     CompareValidityToD2BPattern, PipelineConversionPattern>(converter, &context);
 
         target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
@@ -735,14 +782,18 @@ struct P4HIRToBMv2IRPass : public P4::P4MLIR::impl::P4HIRToBmv2IRBase<P4HIRToBMv
         target.addIllegalOp<P4HIR::StructFieldRefOp>();
         target.addIllegalOp<P4HIR::ReadOp>();
         target.addIllegalOp<P4HIR::CmpOp>();
-        target.addIllegalOp<P4HIR::TableOp>();
-        target.addIllegalOp<P4HIR::IfOp>();
+        target.addIllegalOp<P4HIR::ControlOp>();
 
         if (failed(applyPartialConversion(module, target, std::move(patterns))))
             signalPassFailure();
-        // Drop block arguments of ParserOp since they should be unused after conversion
+        // Drop block arguments of ParserOp and PipelineOp since they should be unused after
+        // conversion
         module.walk([](BMv2IR::ParserOp parserOp) {
             auto &region = parserOp.getBody();
+            while (region.getNumArguments() > 0) region.eraseArgument(0);
+        });
+        module.walk([](BMv2IR::PipelineOp pipelineOp) {
+            auto &region = pipelineOp.getBody();
             while (region.getNumArguments() > 0) region.eraseArgument(0);
         });
     }

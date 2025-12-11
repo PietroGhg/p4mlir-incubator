@@ -267,7 +267,29 @@ def BMv2IR_TableOp : BMv2IR_Op<"table",
   );
 
   let assemblyFormat = [{
-    $sym_name `actions` $actions `next_tables` $next_tables `keys` $keys `size` $size attr-dict
+    $sym_name `\n` `actions` $actions `\n` `next_tables` $next_tables `\n` `keys` $keys `\n` `size` $size attr-dict
+  }];
+}
+
+def BMv2IR_PipelineOp : BMv2IR_Op<"pipeline", [
+    Symbol, SymbolTable,
+    SingleBlock, NoTerminator
+  ]> {
+  let summary = "BMv2 pipeline definition";
+  let description = [{
+    Represents a BMv2 [Pipeline](https://github.com/p4lang/behavioral-model/blob/main/docs/JSON_format.md#pipelines). A Pipeline in BMv2 is a top control flow (ingress/egress).
+    Tables and Conditionals for the pipeline are in this operation's body.
+  }];
+  
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    SymbolRefAttr:$init_table
+  );
+  
+  let regions = (region SizedRegion<1>:$body);
+  
+  let assemblyFormat = [{
+    $sym_name `init_table` $init_table $body attr-dict
   }];
 }
 
