@@ -60,6 +60,10 @@ LogicalResult SymToValueOp::verifySymbolUses(SymbolTableCollection &symbolTable)
 }
 
 LogicalResult ConditionalOp::verify() {
+    // Check that the condition region yields a boolean value
+    auto yieldOp = cast<BMv2IR::YieldOp>(getConditionRegion().front().getTerminator());
+    if (yieldOp->getNumOperands() != 1 || !isa<P4HIR::BoolType>(yieldOp->getOperand(0).getType()))
+        return emitOpError("Condition region should yield a boolean");
     // Check that the then and else symbols refer to either tables, conditionals or
     // (TODO) action calls
     auto moduleOp = getParentModule(*this);
